@@ -1,0 +1,29 @@
+Branch               | Category        | Difficulty | Count
+------------------------------------------------------------
+CIVIL                | technical       | 3          | 3
+CIVIL                | technical       | 5          | 170
+CIVIL                | technical       | 6          | 5
+CIVIL                | technical       | 7          | 47
+CIVIL                | technical       | 8          | 69
+Common               | aptitude        | Easy       | 74
+Common               | aptitude        | Medium     | 47
+Common               | aptitude        | Medium/Extra Hard | 1
+CSE, IT, CSBS, AIDS, AI&DS | technical       | Easy       | 83
+CSE, IT, CSBS, AIDS, AI&DS | technical       | Medium     | 18
+ECE                  | technical       | 1          | 1
+ECE                  | technical       | 2          | 1
+ECE                  | technical       | 3          | 1
+ECE                  | technical       | 4          | 1
+ECE                  | technical       | easy       | 138
+ECE                  | technical       | medium     | 91
+EEE                  | technical       | easy       | 39
+EEE                  | technical       | hard       | 3
+EEE                  | technical       | medium     | 192
+MECH                 | technical       | easy       | 13
+MECH                 | technical       | hard       | 32
+MECH                 | technical       | medium     | 295
+
+Checking EEE specifically:
+Distinct EEE branch strings in DB: ['EEE']
+Total EEE questions (any category): 234
+EEE Technical Easy: 39
