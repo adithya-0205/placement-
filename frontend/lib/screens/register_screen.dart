@@ -111,7 +111,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             dropdownColor: const Color(0xFF161625),
                             icon: const Icon(Icons.arrow_drop_down, color: Colors.white54),
                             style: const TextStyle(color: Colors.white),
-                            items: ["CSE", "IT", "AI&DS", "CSBS", "ECE", "EEE", "MECH", "CIVIL"].map((String branch) {
+                            items: ["CSE", "IT", "AI&DS", "CSBS", "ECE", "EEE", "AEI", "MECH", "CIVIL"].map((String branch) {
                               return DropdownMenuItem<String>(
                                 value: branch,
                                 child: Text(branch),

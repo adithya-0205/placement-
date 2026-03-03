@@ -16,6 +16,7 @@ import pymysql
 from concurrent.futures import ThreadPoolExecutor
 import re
 from typing import List, Dict, Optional
+from question_generator import generate_questions_ai
 
 from database import get_db, init_db, test_connection, SessionLocal, mysql_engine as engine
 
@@ -60,18 +61,13 @@ stt_model = whisper.load_model("base")
 
 def process_weekly_level_up(username: str, db: Session):
     """
-    Holistic Weekly Level-Up Logic
-    - Triggered on Login or Dashboard view
-    - Checks if it's Sunday
-    - Aggregates scores: Aptitude, Technical, GD, Interview
-    - Level up if holistic average >= 7 (70%)
+    Fluid Level-Up Logic
+    - Rule: Must complete 7 days of daily quizzes + 1 GD + 1 Interview to unlock next level.
+    - Trigger: Anytime the requirement is met since the last Level Update.
     """
     try:
         today = date.today()
-        # Only trigger on Sunday (weekday 6)
-        if today.weekday() != 6:
-            return False
-
+        
         # Get user
         user_result = db.execute(
             text("SELECT aptitude_level, technical_level, last_level_update FROM users WHERE username = :u"),
@@ -81,55 +77,83 @@ def process_weekly_level_up(username: str, db: Session):
         if not user: return False
         
         apt_lvl, tech_lvl, last_update = user
-        
-        # Prevent multiple updates in the same week
-        if last_update and last_update.date() >= today - timedelta(days=6):
-            return False
-
-        # 1. Aggregate Scores from last 7 days from results table
-        scores_result = db.execute(
+        # Default last_update to 7 days ago if null to allow first-time check
+        if not last_update:
+            last_update = datetime.now() - timedelta(days=7)
+            
+        # 1. Aggregate Activity percentage since LAST UPDATE
+        activity_counts = db.execute(
             text("""
-                SELECT category, AVG(score) as avg_score, COUNT(*) as count 
+                SELECT category, COUNT(*) as count, SUM(score) as total_s, SUM(total_questions) as total_q
                 FROM results 
-                WHERE username = :u AND timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                WHERE username = :u 
+                AND timestamp >= :last_up
                 GROUP BY category
             """),
-            {"u": username}
-        )
+            {"u": username, "last_up": last_update}
+        ).fetchall()
         
-        results = scores_result.fetchall()
-        if not results: return False
-        
-        cat_scores = {row[0].upper(): row[1] for row in results}
+        # Calculate percentage: (total_score / total_questions) * 100
+        stats = {}
+        for row in activity_counts:
+            cat = row[0].upper()
+            cnt = row[1]
+            t_s = row[2] or 0
+            t_q = row[3] or 1 # prevent zero division
+            
+            # If total_questions is missing or 0 in DB, default to out of 10 for quizzes, 100 for GD/Interview
+            if t_q == 0 or t_q == 1:
+                 t_q = 100 if cat in ['GD', 'INTERVIEW'] else (cnt * 10)
+                 
+            percent = (t_s / t_q) * 100
+            stats[cat] = {"count": cnt, "avg_percent": percent}
 
-        # 2. Calculate Holistic Metrics
-        # Aptitude: 
-        apt_avg = cat_scores.get('APTITUDE', 0)
+        # Count distinct days where both Aptitude and Technical were completed since last update
+        dual_completion_res = db.execute(
+            text("""
+                SELECT COUNT(*) FROM (
+                    SELECT DATE(timestamp) as d
+                    FROM results 
+                    WHERE username = :u 
+                    AND category IN ('APTITUDE', 'TECHNICAL')
+                    AND timestamp >= :last_up
+                    GROUP BY DATE(timestamp)
+                    HAVING COUNT(DISTINCT category) = 2
+                ) as t
+            """),
+            {"u": username, "last_up": last_update}
+        ).fetchone()
         
-        # Technical aggregate: (Tech Quizzes + GD + Interview)
-        tech_quizzes = cat_scores.get('TECHNICAL', 0)
-        gd_avg = cat_scores.get('GD', 0)
-        interview_avg = cat_scores.get('INTERVIEW', 0)
-        
-        total_activities = sum(row[2] for row in results)
+        days_completed = dual_completion_res[0] or 0
 
-        # Holistic Tech Avg (Average of non-zero modules)
-        tech_modules = [v for v in [tech_quizzes, gd_avg, interview_avg] if v > 0]
-        tech_holistic_avg = sum(tech_modules) / len(tech_modules) if tech_modules else 0
+        # 2. Strict Requirements Check (Since last update)
+        gd_sessions = stats.get('GD', {}).get('count', 0)
+        interview_sessions = stats.get('INTERVIEW', {}).get('count', 0)
+
+        # Percentages for quality check
+        apt_percent = stats.get('APTITUDE', {}).get('avg_percent', 0)
+        tech_percent = stats.get('TECHNICAL', {}).get('avg_percent', 0)
+        gd_percent = stats.get('GD', {}).get('avg_percent', 0)
+        interview_percent = stats.get('INTERVIEW', {}).get('avg_percent', 0)
+
+        # Require 7 distinct days + 75% across required categories
+        can_level_up_apt = (days_completed >= 7 and apt_percent >= 75)
+        can_level_up_tech = (days_completed >= 7 and tech_percent >= 75 and gd_percent >= 75 and interview_percent >= 75)
 
         # 3. Level Up Logic
         new_apt_lvl = apt_lvl
-        if apt_avg >= 7 and apt_lvl < 3:
+        if can_level_up_apt and apt_lvl < 4:
             new_apt_lvl += 1
             
         new_tech_lvl = tech_lvl
-        if tech_holistic_avg >= 7 and tech_lvl < 3:
+        if can_level_up_tech and tech_lvl < 4:
+            new_tech_lvl += 1
             new_tech_lvl += 1
 
         level_up_occurred = (new_apt_lvl > apt_lvl or new_tech_lvl > tech_lvl)
 
         # 4. Save to weekly_stats
-        overall_avg = (apt_avg + tech_holistic_avg) / 2 if (apt_avg > 0 and tech_holistic_avg > 0) else (apt_avg or tech_holistic_avg)
+        overall_avg = (apt_avg + tech_avg) / 2 if (apt_avg > 0 and tech_avg > 0) else (apt_avg or tech_avg)
         
         db.execute(
             text("""
@@ -138,10 +162,10 @@ def process_weekly_level_up(username: str, db: Session):
             """),
             {
                 "u": username,
-                "d": today,
+                "d": today - timedelta(days=6), # Record the starting Monday
                 "s": overall_avg,
                 "lu": 1 if level_up_occurred else 0,
-                "cnt": total_activities
+                "cnt": days_completed + gd_sessions + interview_sessions
             }
         )
 
@@ -158,7 +182,6 @@ def process_weekly_level_up(username: str, db: Session):
         )
         
         db.commit()
-        print(f"🌟 Weekly Level Up Processed for {username}. Level up: {level_up_occurred}")
         return level_up_occurred
 
     except Exception as e:
@@ -185,8 +208,10 @@ def get_user_level(db: Session, username: str, category: str):
         return "Easy"
     elif level == 2:
         return "Medium"
-    else:
+    elif level == 3:
         return "Hard"
+    else:
+        return "Company-level"
 
 def get_todays_questions(db: Session, username: str, category: str, target_branch: str = None):
     """Get 10 questions for today - avoiding repeats from previous days"""
@@ -265,6 +290,10 @@ def get_todays_questions(db: Session, username: str, category: str, target_branc
         # Use target_branch if provided, otherwise user's actual branch
         branch_to_use = target_branch if target_branch else user_actual_branch
         
+        # Map AEI to ECE for technical questions
+        if branch_to_use and branch_to_use.upper() == 'AEI':
+            branch_to_use = 'ECE'
+            
         if branch_to_use:
             # Fetch candidate questions where the requested branch is in the comma-separated branch list
             # We use FIND_IN_SET and REPLACE to handle possible spaces in the DB values
@@ -340,40 +369,115 @@ def get_todays_questions(db: Session, username: str, category: str, target_branc
         print(f"✅ Total available questions for {category}: {len(all_candidate_ids)}")
 
     
-    # Filter out seen questions
-    available_ids = [qid for qid in all_candidate_ids if qid not in seen_ids]
-
+    # --- IMPROVED: WEEKLY TOPIC BALANCING LOGIC ---
     
-    # Selection Logic
+    # 1. Identify Week Start (Monday)
+    today_dt = date.today()
+    week_start = today_dt - timedelta(days=today_dt.weekday())
+    week_start_ts = datetime.combine(week_start, time.min)
+    
+    # 2. Get all distinct areas for this branch/category
+    branch_val = branch_to_use.upper() if (category.lower() == "technical" and branch_to_use) else "COMMON"
+    area_query = """
+        SELECT DISTINCT area FROM questions 
+        WHERE category = :category 
+        AND (LOWER(branch) = LOWER(:branch) OR FIND_IN_SET(LOWER(:branch), REPLACE(LOWER(branch), ' ', '')) OR :branch = 'COMMON')
+        AND area IS NOT NULL AND area != ''
+    """
+    distinct_raw = db.execute(text(area_query), {"category": category.lower(), "branch": branch_val}).fetchall()
+    distinct_areas = [r[0] for r in distinct_raw]
+    
+    if not distinct_areas:
+        distinct_areas = ["General"]
+    
+    # 3. Get current weekly distribution from results table
+    distribution_query = """
+        SELECT area, SUM(total_questions) as count 
+        FROM results 
+        WHERE username = :username 
+        AND category = :category 
+        AND timestamp >= :week_start
+        GROUP BY area
+    """
+    db_counts = db.execute(text(distribution_query), {
+        "username": username,
+        "category": category.upper(),
+        "week_start": week_start_ts
+    }).fetchall()
+    
+    current_counts = {area: 0 for area in distinct_areas}
+    for row in db_counts:
+        area_name = row[0]
+        if area_name in current_counts:
+            current_counts[area_name] = int(row[1])
+    
+    # 4. Selection Algorithm: Deficit-Based (Highest Deficit First)
+    # Target: 70 questions per week shared among topics
+    target_per_area = 70.0 / len(distinct_areas)
+    
     question_ids = []
+    temp_counts = current_counts.copy()
     
-    if len(available_ids) >= 10:
-        # We have enough new questions
-        random.shuffle(available_ids)
-        question_ids = available_ids[:10]
-    else:
-        # Not enough new questions, mix in some old ones or just take what we have + random repeats
-        question_ids = available_ids[:] # Take all available new ones
+    for _ in range(10):
+        # Calculate deficits and pick highest
+        deficits = []
+        for area in distinct_areas:
+            deficit = target_per_area - temp_counts[area]
+            deficits.append((area, deficit))
         
-        # Fill the rest with random old questions of same difficulty
-        needed = 10 - len(question_ids)
-        if needed > 0:
-            # Re-use candidate_ids that ARE in seen_ids
-            used_candidates = [qid for qid in all_candidate_ids if qid in seen_ids]
-            random.shuffle(used_candidates)
-            question_ids.extend(used_candidates[:needed])
-            
-    # Final check if we still don't have 10 (e.g. total questions < 10)
-    if len(question_ids) < 10:
-         # Try to fill with ANY questions from category if strictly needed, or just return what we have
-         # For now, let's just return what we have if total universe is small
-         pass
+        # Sort by deficit descending, add slight random shuffle to same-deficit areas
+        random.shuffle(deficits)
+        deficits.sort(key=lambda x: x[1], reverse=True)
+        best_area = deficits[0][0]
+        
+        # Get candidate IDs for this SPECIFIC area
+        area_candidates_query = """
+            SELECT id FROM questions 
+            WHERE category = :category 
+            AND LOWER(area) = LOWER(:area)
+            AND (LOWER(branch) = LOWER(:branch) OR FIND_IN_SET(LOWER(:branch), REPLACE(LOWER(branch), ' ', '')) OR :branch = 'COMMON')
+        """
+        area_candidates = [row[0] for row in db.execute(
+            text(area_candidates_query),
+            {"category": category.lower(), "area": best_area, "branch": branch_val}
+        ).fetchall()]
+        
+        # Filter seen (avoiding repetition within the same daily quiz too)
+        valid_candidates = [qid for qid in area_candidates if qid not in seen_ids and qid not in question_ids]
+        
+        selected_qid = None
+        if valid_candidates:
+            selected_qid = random.choice(valid_candidates)
+        else:
+            # Need more! Trigger AI generation for 1 question
+            print(f"✨ Area '{best_area}' has deficit but no fresh questions. Generating...")
+            new_ai_ids = generate_questions_ai(
+                branch=branch_val,
+                category=category,
+                area=best_area,
+                difficulty_text=difficulty,
+                count=1
+            )
+            if new_ai_ids:
+                selected_qid = new_ai_ids[0]
+            else:
+                # Fallback: allow repeats if AI fails
+                repeats = [qid for qid in area_candidates if qid not in question_ids]
+                if repeats:
+                    selected_qid = random.choice(repeats)
+        
+        if selected_qid:
+            question_ids.append(selected_qid)
+            temp_counts[best_area] += 1
+        else:
+            # Absolute fallback: pick any available question from overall candidates
+            remaining = [qid for qid in all_candidate_ids if qid not in question_ids]
+            if remaining:
+                pick = random.choice(remaining)
+                question_ids.append(pick)
 
-    if not question_ids:
-         raise HTTPException(
-            status_code=404, 
-            detail=f"No questions available for {category} ({difficulty})."
-        )
+    # Truncate to 10 just in case
+    question_ids = question_ids[:10]
     
     # Save for today (ONLY if NOT practice mode)
     if not is_practice_mode:
@@ -746,13 +850,14 @@ async def submit_quiz(submission: QuizCompleteSubmission, db: Session = Depends(
             
             db.execute(
                 text("""
-                    INSERT INTO results (username, category, score, area, timestamp) 
-                    VALUES (:username, :category, :score, :area, NOW())
+                    INSERT INTO results (username, category, score, total_questions, area, timestamp) 
+                    VALUES (:username, :category, :score, :total_questions, :area, NOW())
                 """),
                 {
                     "username": submission.username,
                     "category": submission.category.upper(),
                     "score": submission.score,
+                    "total_questions": submission.total_questions,
                     "area": area_to_save
                 }
             )
@@ -815,100 +920,348 @@ async def get_quiz_status(username: str, category: str, db: Session = Depends(ge
 
 @app.get("/weekly_report/{username}", tags=["Analytics"])
 async def get_weekly_report(username: str, db: Session = Depends(get_db)):
-    """Get performance analytics from weekly_stats"""
+    """Get performance analytics with daily and weekly aggregations"""
     try:
-        # 1. Try to get historical weekly stats for the graph
-        stats_result = db.execute(
+        # 1. Daily Aggregation for Aptitude and Technical (Last 7 Days)
+        def get_daily_agg(cat_name):
+            res = db.execute(
+                text("""
+                    SELECT DATE(timestamp) as day, AVG(score) as avg_score
+                    FROM results 
+                    WHERE username = :username AND category = :category
+                    AND timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+                    GROUP BY DATE(timestamp)
+                    ORDER BY day ASC
+                """),
+                {"username": username.strip(), "category": cat_name}
+            )
+            return [{"score": round(float(r[1]), 1), "time": str(r[0])} for r in res.fetchall()]
+
+        # 2. Weekly Aggregation for GD and Interview (Last 4 Weeks)
+        def get_weekly_agg(cat_name):
+            res = db.execute(
+                text("""
+                    SELECT YEARWEEK(timestamp) as week, AVG(score) as avg_score, MIN(DATE(timestamp)) as week_start
+                    FROM results 
+                    WHERE username = :username AND category = :category
+                    AND timestamp >= DATE_SUB(CURDATE(), INTERVAL 4 WEEK)
+                    GROUP BY YEARWEEK(timestamp)
+                    ORDER BY week ASC
+                """),
+                {"username": username.strip(), "category": cat_name}
+            )
+            return [{"score": round(float(r[1]), 1), "week_start": str(r[2])} for r in res.fetchall()]
+
+        aptitude_daily = get_daily_agg("APTITUDE")
+        technical_daily = get_daily_agg("TECHNICAL")
+        gd_weekly = get_weekly_agg("GD")
+        interview_weekly = get_weekly_agg("INTERVIEW")
+
+        # 3. Consistency Streak
+        streak_query = db.execute(
+            text("SELECT DISTINCT DATE(timestamp) as d FROM results WHERE username = :username ORDER BY d DESC"),
+            {"username": username.strip()}
+        ).fetchall()
+        dates = [r[0] for r in streak_query]
+        streak = 0
+        curr = date.today()
+        if dates and curr not in dates and (curr - timedelta(days=1)) in dates:
+            curr -= timedelta(days=1)
+        while curr in dates:
+            streak += 1
+            curr -= timedelta(days=1)
+
+        # 4. Strong Areas (Avg > 7.0)
+        strong_res = db.execute(
             text("""
-                SELECT avg_score, week_start_date FROM weekly_stats 
-                WHERE username = :username 
-                ORDER BY week_start_date ASC
+                SELECT area, AVG(score) as avg_s, COUNT(*) as count 
+                FROM results 
+                WHERE username = :username AND area IS NOT NULL AND area != '' AND area != 'Daily Quiz'
+                GROUP BY area
+            """),
+            {"username": username.strip()}
+        ).fetchall()
+        
+        strong_areas = [r[0] for r in strong_res if r[1] >= 7.0]
+        
+        # 5. Badges Logic
+        badges = []
+        # Topic Mastery (90% + min 5 attempts)
+        for r in strong_res:
+            if r[1] >= 9.0 and r[2] >= 5:
+                badges.append({"name": f"{r[0]} Master", "icon": "emoji_events", "color": "gold"})
+        
+        # Consistency Badge
+        if streak >= 7:
+            badges.append({"name": "7-Day Streak", "icon": "whatshot", "color": "orange"})
+            
+        # GD Eloquent (Avg communication > 8.0 + min 3 sessions)
+        gd_res = db.execute(
+            text("SELECT AVG(communication_score), COUNT(*) FROM gd_evaluations WHERE username = :u"),
+            {"u": username.strip()}
+        ).fetchone()
+        if gd_res and gd_res[0] and gd_res[0] >= 8.0 and gd_res[1] >= 3:
+            badges.append({"name": "GD Eloquent", "icon": "record_voice_over", "color": "blue"})
+            
+        # Interview Ace (Avg overall > 8.5 + min 3 sessions)
+        # Assuming we have a mock_interviews or similar table, or using results if categorized
+        int_res = db.execute(
+            text("SELECT AVG(score), COUNT(*) FROM results WHERE username = :u AND category = 'INTERVIEW'"),
+            {"u": username.strip()}
+        ).fetchone()
+        if int_res and int_res[0] and int_res[0] >= 8.5 and int_res[1] >= 3:
+            badges.append({"name": "Interview Ace", "icon": "face", "color": "purple"})
+
+        # 6. Calculate status and Readiness
+        avg_res = db.execute(
+            text("""
+                SELECT AVG(score) FROM results 
+                WHERE username = :username AND timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)
             """),
             {"username": username.strip()}
         )
-        stats_rows = stats_result.fetchall()
+        latest_avg = float(avg_res.scalar() or 0)
         
-        # 2. If no weekly stats yet, fallback to raw results for recent trend
-        if not stats_rows:
-            raw_result = db.execute(
-                text("""
-                    SELECT score, timestamp FROM results 
-                    WHERE username = :username 
-                    ORDER BY timestamp DESC LIMIT 7
-                """),
-                {"username": username.strip()}
-            )
-            raw_rows = raw_result.fetchall()
-            if not raw_rows:
-                return {"has_data": False}
-            
-            graph_data = [{"score": r[0], "time": str(r[1])} for r in raw_rows]
-            graph_data.reverse()
-        else:
-            graph_data = [{"score": r[0], "time": str(r[1].date())} for r in stats_rows]
+        # Readiness Score: (avg_score * 8) + (streak * 2) - capped at 100
+        readiness_score = min(100, (latest_avg * 8.5) + (min(streak, 7) * 2.1))
 
-        # 3. Calculate latest performance metrics
-        latest_avg = graph_data[-1]["score"] if graph_data else 0
-        
         status = "Beginner"
-        if latest_avg >= 8:
-            status = "Expert"
-        elif latest_avg >= 5:
-            status = "Intermediate"
+        if latest_avg >= 8: status = "Expert"
+        elif latest_avg >= 5: status = "Intermediate"
 
         return {
-            "has_data": True,
-            "graph_data": graph_data,
+            "has_data": any([aptitude_daily, technical_daily, gd_weekly, interview_weekly]),
+            "aptitude_daily": aptitude_daily,
+            "technical_daily": technical_daily,
+            "gd_weekly": gd_weekly,
+            "interview_weekly": interview_weekly,
             "status": status,
-            "current_performance": round(latest_avg, 1)
+            "current_performance": round(latest_avg, 1),
+            "streak": streak,
+            "strong_areas": strong_areas,
+            "readiness_score": round(readiness_score, 1),
+            "badges": badges
         }
     except Exception as e:
+        print(f"Error in weekly_report: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/leaderboard/{branch}", tags=["Leaderboard"])
+async def get_branch_leaderboard(branch: str, db: Session = Depends(get_db)):
+    """Fetch top 10 students in a branch based on Readiness Score"""
+    try:
+        # 1. Get all students in this branch
+        users = db.execute(
+            text("SELECT username, aptitude_level, technical_level FROM users WHERE branch = :b AND role = 'student'"),
+            {"b": branch}
+        ).fetchall()
+
+        leaderboard = []
+        today = date.today()
+
+        for user in users:
+            uname = user[0]
+            
+            # 2. Calculate Streak (Past 7 days)
+            streak = 0
+            curr = today
+            while True:
+                count = db.execute(
+                    text("SELECT COUNT(*) FROM results WHERE username = :u AND DATE(timestamp) = :d"),
+                    {"u": uname, "d": curr}
+                ).fetchone()[0]
+                if count > 0:
+                    streak += 1
+                    curr -= timedelta(days=1)
+                else:
+                    break
+            
+            # 3. Calculate Latest Avg (Past 7 days)
+            avg_res = db.execute(
+                text("""
+                    SELECT AVG(score) FROM results 
+                    WHERE username = :u AND timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                """),
+                {"u": uname}
+            ).scalar()
+            latest_avg = float(avg_res or 0)
+
+            # 4. Final Readiness Score
+            readiness = min(100, (latest_avg * 8.5) + (min(streak, 7) * 2.1))
+            
+            # 5. Get Badges Count
+            badges_count = db.execute(
+                text("SELECT COUNT(*) FROM results WHERE username = :u AND score >= 9"),
+                {"u": uname}
+            ).fetchone()[0] or 0
+
+            leaderboard.append({
+                "username": uname,
+                "readiness_score": round(readiness, 1),
+                "badges_count": badges_count,
+                "level": user[2] # Technical level as proxy for expertise
+            })
+
+        # Sort by readiness score descending
+        leaderboard.sort(key=lambda x: x['readiness_score'], reverse=True)
+        
+        return leaderboard[:10] # Return Top 10
+
+    except Exception as e:
+        print(f"LEADERBOARD ERROR: {e}")
+        return []
 
 
 @app.get("/dashboard/{username}", tags=["User"])
 async def get_dashboard(username: str, db: Session = Depends(get_db)):
-    """Get user dashboard data"""
+    """Get user dashboard data with task tracking and weekly progress"""
     from models import User, Score
     try:
         user = db.query(User).filter(User.username == username.strip()).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User find failed")
+
+        # Trigger weekly checks
+        process_weekly_level_up(username.strip(), db)
         
-        if user:
-            # Trigger weekly level up check on dashboard view
-            process_weekly_level_up(username.strip(), db)
+        # 1. Check Daily Completions (Scores recorded TODAY)
+        today = date.today()
+        daily_res = db.execute(
+            text("""
+                SELECT category, SUM(score) as total_s, COUNT(*) as count 
+                FROM results 
+                WHERE username = :username AND DATE(timestamp) = :today
+                GROUP BY category
+            """),
+            {"username": username.strip(), "today": today}
+        ).fetchall()
+        
+        daily_stats = {row[0].upper(): row[2] for row in daily_res}
+        # Assuming each 'result' entry for Apt/Tech represents 1 session of 10 questions
+        aptitude_done = daily_stats.get("APTITUDE", 0) >= 1
+        tech_done = daily_stats.get("TECHNICAL", 0) >= 1
+
+        # 2. Check Weekly Completions (Strict CURRENT WEEK: Monday to Sunday)
+        # Monday of this week: DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)
+        weekly_res = db.execute(
+            text("""
+                SELECT category, COUNT(*) as count 
+                FROM results 
+                WHERE username = :username 
+                AND timestamp >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)
+                GROUP BY category
+            """),
+            {"username": username.strip()}
+        ).fetchall()
+        
+        weekly_stats = {row[0].upper(): row[1] for row in weekly_res}
+        gd_done = weekly_stats.get("GD", 0) >= 1
+        interview_done = weekly_stats.get("INTERVIEW", 0) >= 1
+
+        # 2. Count distinct days for each category this week
+        tech_days = db.execute(text("""
+            SELECT COUNT(DISTINCT DATE(timestamp)) FROM results 
+            WHERE username = :username AND category = 'TECHNICAL'
+            AND timestamp >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)
+        """), {"username": username.strip()}).fetchone()[0] or 0
+        
+        apt_days = db.execute(text("""
+            SELECT COUNT(DISTINCT DATE(timestamp)) FROM results 
+            WHERE username = :username AND category = 'APTITUDE'
+            AND timestamp >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)
+        """), {"username": username.strip()}).fetchone()[0] or 0
+
+        # 3. Calculate Weekly Progress (%)
+        # Logic: 7 units for Tech + 7 units for Aptitude + 1 unit for GD + 1 unit for Interview = 16 units total
+        progress_units = min(tech_days, 7) + min(apt_days, 7) + (1 if gd_done else 0) + (1 if interview_done else 0)
+        weekly_progress = (progress_units / 16.0) * 100
+
+        # 4. Weak Areas logic
+        def get_top_weak_areas(cat_name):
+            # 1. Total Distinct Days Check
+            distinct_days_res = db.execute(
+                text("SELECT COUNT(DISTINCT DATE(timestamp)) FROM results WHERE username = :username"),
+                {"username": username.strip()}
+            ).fetchone()
             
-            # Get latest weak area
-        latest_result = db.query(Score).filter(Score.username == username.strip()).order_by(Score.id.desc()).first()
-        weak_area = latest_result.area if latest_result and latest_result.area else "None"
-
-        if user:
-            # Get latest weak area for Technical
-            tech_result = db.query(Score).filter(
-                Score.username == username.strip(), 
-                Score.category == "TECHNICAL"
-            ).order_by(Score.id.desc()).first()
-            weak_area_tech = tech_result.area if tech_result and tech_result.area else "None"
-
-            # Get latest weak area for Aptitude
-            apt_result = db.query(Score).filter(
-                Score.username == username.strip(), 
-                Score.category == "APTITUDE"
-            ).order_by(Score.id.desc()).first()
-            weak_area_apt = apt_result.area if apt_result and apt_result.area else "None"
-
+            total_days = distinct_days_res[0] or 0
+            
+            # 2. Strict Rolling 7-Day Window
+            rolling_window_start = "DATE_SUB(NOW(), INTERVAL 7 DAY)"
+            
+            # Identify weak areas based ONLY on the last 7 days
+            res = db.execute(
+                text(f"""
+                    SELECT 
+                        area, 
+                        SUM(score) as correct, 
+                        SUM(total_questions) as total,
+                        (SUM(score) / SUM(total_questions) * 100) as percentage
+                    FROM results 
+                    WHERE username = :username AND category = :category 
+                    AND area != 'Daily Quiz' AND area IS NOT NULL
+                    AND timestamp >= {rolling_window_start}
+                    GROUP BY area 
+                    HAVING percentage <= 70.0
+                    ORDER BY percentage ASC 
+                    LIMIT 3
+                """),
+                {"username": username.strip(), "category": cat_name}
+            ).fetchall()
+            
             return {
-                "id": user.id,
-                "username": user.username,
-                "aptitude_level": user.aptitude_level,
-                "technical_level": user.technical_level,
-                "branch": user.branch,
-                "weak_area_tech": weak_area_tech,
-                "weak_area_apt": weak_area_apt
+                "areas": [
+                    {
+                        "area": r[0], 
+                        "correct": int(r[1]),
+                        "total": int(r[2]),
+                        "wrong": int(r[2]) - int(r[1]),
+                        "percentage": round(float(r[3]), 1)
+                    } for r in res
+                ],
+                "total_days": total_days,
+                "status": "active" if total_days >= 3 else "collecting"
             }
-        raise HTTPException(status_code=404, detail="User not found")
+
+        weak_areas_tech_data = get_top_weak_areas("TECHNICAL")
+        weak_areas_apt_data = get_top_weak_areas("APTITUDE")
+
+        # 5. Accuracy & Total Attempts
+        all_time_res = db.execute(
+            text("SELECT COUNT(*), AVG(score) FROM results WHERE username = :username"),
+            {"username": username.strip()}
+        ).fetchone()
+        
+        total_attempts = all_time_res[0] or 0
+        avg_score = float(all_time_res[1] or 0)
+        accuracy = (avg_score / 10.0) * 100
+
+        return {
+            "id": user.id,
+            "username": user.username,
+            "aptitude_level": user.aptitude_level,
+            "technical_level": user.technical_level,
+            "branch": user.branch,
+            "weak_areas_tech": weak_areas_tech_data["areas"],
+            "weak_areas_apt": weak_areas_apt_data["areas"],
+            "weak_areas_tech_status": weak_areas_tech_data["status"],
+            "weak_areas_apt_status": weak_areas_apt_data["status"],
+            "total_days": weak_areas_tech_data["total_days"],
+            "tasks": {
+                "aptitude_done": aptitude_done,
+                "tech_done": tech_done,
+                "gd_done": gd_done,
+                "interview_done": interview_done
+            },
+            "weekly_progress": round(weekly_progress, 1),
+            "total_attempts": total_attempts,
+            "accuracy": round(accuracy, 1)
+        }
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Error in dashboard: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/evaluate_interview", tags=["Interview Practice"])
@@ -950,13 +1303,14 @@ Evaluate strictly. Return ONLY JSON:
         db.execute(
             text(
                 """
-                INSERT INTO results (username, score, category, area, timestamp)
-                VALUES (:username, :score, :category, :area, :timestamp)
+                INSERT INTO results (username, score, total_questions, category, area, timestamp)
+                VALUES (:username, :score, :total_questions, :category, :area, :timestamp)
                 """
             ),
             {
                 "username": username,
                 "score": score_val,
+                "total_questions": 1,
                 "category": "INTERVIEW",
                 "area": "Interview Practice", # Default area for interview
                 "timestamp": datetime.now()

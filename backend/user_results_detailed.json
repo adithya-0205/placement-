@@ -1,0 +1,369 @@
+[
+    {
+        "username": "Adithya1",
+        "results": [
+            {
+                "category": "TECHNICAL",
+                "area": "Python Programming",
+                "score": 0,
+                "timestamp": "2026-02-11 07:24:35"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "algebra",
+                "score": 0,
+                "timestamp": "2026-02-11 07:24:59"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "mathematics/algebra",
+                "score": 0,
+                "timestamp": "2026-02-11 07:25:24"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 7,
+                "timestamp": "2026-02-11 21:23:00"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 9,
+                "timestamp": "2026-02-11 21:49:19"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 8,
+                "timestamp": "2026-02-11 22:01:34"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 0,
+                "timestamp": "2026-02-12 08:18:10"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 1,
+                "timestamp": "2026-02-12 16:48:29"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 3,
+                "timestamp": "2026-02-12 22:03:10"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 3,
+                "timestamp": "2026-02-14 22:57:45"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 1,
+                "timestamp": "2026-02-14 23:00:47"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 0,
+                "timestamp": "2026-02-14 23:05:57"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 7,
+                "timestamp": "2026-02-14 23:10:14"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 3,
+                "timestamp": "2026-02-14 23:11:18"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 3,
+                "timestamp": "2026-02-14 23:12:01"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 2,
+                "timestamp": "2026-02-15 00:43:09"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 5,
+                "timestamp": "2026-02-15 01:07:06"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 5,
+                "timestamp": "2026-02-15 01:24:16"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 1,
+                "timestamp": "2026-02-15 02:33:49"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 2,
+                "timestamp": "2026-02-15 02:34:36"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 2,
+                "timestamp": "2026-02-15 02:35:45"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 0,
+                "timestamp": "2026-02-15 02:40:50"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 3,
+                "timestamp": "2026-02-15 02:43:13"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 2,
+                "timestamp": "2026-02-15 02:44:21"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 2,
+                "timestamp": "2026-02-15 09:10:29"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 3,
+                "timestamp": "2026-02-15 09:16:01"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 3,
+                "timestamp": "2026-02-15 09:36:30"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 1,
+                "timestamp": "2026-02-15 11:32:32"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 10,
+                "timestamp": "2026-02-15 11:37:25"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 9,
+                "timestamp": "2026-02-15 11:42:46"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 9,
+                "timestamp": "2026-02-15 11:45:20"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 8,
+                "timestamp": "2026-02-15 11:46:55"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Machine Learning",
+                "score": 5,
+                "timestamp": "2026-02-18 21:41:48"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Permutations and Combinations with Restriction",
+                "score": 5,
+                "timestamp": "2026-02-18 22:51:30"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Functions",
+                "score": 7,
+                "timestamp": "2026-02-18 22:54:49"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Cloud and Virtualization",
+                "score": 9,
+                "timestamp": "2026-02-18 22:55:47"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Data Structures and Algorithms",
+                "score": 2,
+                "timestamp": "2026-02-19 07:06:42"
+            },
+            {
+                "category": "INTERVIEW",
+                "area": "Interview Practice",
+                "score": 2,
+                "timestamp": "2026-02-19 15:02:36"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Machine Learning",
+                "score": 6,
+                "timestamp": "2026-02-28 11:09:58"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Machine Learning",
+                "score": 9,
+                "timestamp": "2026-02-28 11:13:02"
+            }
+        ]
+    },
+    {
+        "username": "Abiya",
+        "results": [
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 3,
+                "timestamp": "2026-02-15 18:58:54"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Machine Learning",
+                "score": 3,
+                "timestamp": "2026-02-17 19:16:01"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Machine Learning",
+                "score": 4,
+                "timestamp": "2026-02-17 19:22:01"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Simple Interest",
+                "score": 4,
+                "timestamp": "2026-02-17 19:23:11"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Data Structures",
+                "score": 8,
+                "timestamp": "2026-02-17 21:28:36"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Machine Learning",
+                "score": 9,
+                "timestamp": "2026-02-17 21:36:27"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Machine Learning",
+                "score": 4,
+                "timestamp": "2026-02-17 22:06:45"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Machine Learning",
+                "score": 9,
+                "timestamp": "2026-02-17 23:26:15"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Pattern Recognition",
+                "score": 5,
+                "timestamp": "2026-02-17 23:55:56"
+            },
+            {
+                "category": "APTITUDE",
+                "area": "Logic",
+                "score": 8,
+                "timestamp": "2026-02-18 23:12:55"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Python",
+                "score": 9,
+                "timestamp": "2026-02-18 23:12:55"
+            },
+            {
+                "category": "GD",
+                "area": "Communication",
+                "score": 7,
+                "timestamp": "2026-02-18 23:12:55"
+            },
+            {
+                "category": "INTERVIEW",
+                "area": "Performance",
+                "score": 8,
+                "timestamp": "2026-02-18 23:12:55"
+            }
+        ]
+    },
+    {
+        "username": "test_branch_user_1",
+        "results": [
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 10,
+                "timestamp": "2026-02-15 11:55:22"
+            },
+            {
+                "category": "TECHNICAL",
+                "area": "Daily Quiz",
+                "score": 10,
+                "timestamp": "2026-02-15 11:56:04"
+            }
+        ]
+    },
+    {
+        "username": "Adithya2",
+        "results": [
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 4,
+                "timestamp": "2026-02-15 12:26:42"
+            }
+        ]
+    },
+    {
+        "username": "test_levelup_xg1axx",
+        "results": [
+            {
+                "category": "APTITUDE",
+                "area": "Daily Quiz",
+                "score": 8,
+                "timestamp": "2026-02-11 19:19:51"
+            }
+        ]
+    }
+]

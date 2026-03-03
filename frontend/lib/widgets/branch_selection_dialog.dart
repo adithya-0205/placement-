@@ -13,7 +13,7 @@ class BranchSelectionDialog extends StatefulWidget {
 
 class _BranchSelectionDialogState extends State<BranchSelectionDialog> {
   String? _selectedBranch;
-  final List<String> _branches = ["CSE", "IT", "AI&DS", "CSBS", "ECE", "EEE", "MECH", "CIVIL"];
+  final List<String> _branches = ["CSE", "IT", "AI&DS", "CSBS", "ECE", "EEE", "AEI", "MECH", "CIVIL"];
   bool _isUpdating = false;
 
   @override

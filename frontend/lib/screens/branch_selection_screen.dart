@@ -21,6 +21,7 @@ class _BranchSelectionScreenState extends State<BranchSelectionScreen> {
     {'code': 'CSBS', 'name': 'Computer Science & Business Systems', 'icon': Icons.business},
     {'code': 'ECE', 'name': 'Electronics & Communication', 'icon': Icons.electrical_services},
     {'code': 'EEE', 'name': 'Electrical & Electronics', 'icon': Icons.bolt},
+    {'code': 'AEI', 'name': 'Applied Electronics & Instrumentation', 'icon': Icons.electrical_services},
     {'code': 'MECH', 'name': 'Mechanical Engineering', 'icon': Icons.precision_manufacturing},
     {'code': 'CIVIL', 'name': 'Civil Engineering', 'icon': Icons.foundation},
   ];

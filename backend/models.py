@@ -26,6 +26,7 @@ class Score(Base):
     username = Column(String(255), nullable=False)
     category = Column(String(50), nullable=False)
     score = Column(Integer, nullable=False)
+    total_questions = Column(Integer, default=10)
     area = Column(String(100))
     timestamp = Column(TIMESTAMP, server_default=func.now())
 

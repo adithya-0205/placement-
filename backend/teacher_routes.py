@@ -144,16 +144,19 @@ async def get_student_progress(username: str, db: Session = Depends(get_db)):
             "date": str(row[3])
         })
     
-    # Get weak areas (areas with low scores)
+    # Get weak areas (areas with low scores) - rolling 7 days
     weak_areas = db.execute(text("""
         SELECT 
             area,
-            AVG(score * 10) as avg_percentage,
+            (SUM(score) / SUM(total_questions) * 100) as avg_percentage,
             COUNT(*) as attempts
         FROM results
-        WHERE username = :username AND area IS NOT NULL
+        WHERE username = :username 
+          AND area IS NOT NULL 
+          AND area != 'Daily Quiz'
+          AND timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)
         GROUP BY area
-        HAVING avg_percentage < 70
+        HAVING avg_percentage <= 70
         ORDER BY avg_percentage ASC
         LIMIT 5
     """), {"username": username})

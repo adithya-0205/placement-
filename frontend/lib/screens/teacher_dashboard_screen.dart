@@ -361,7 +361,7 @@ class _StudentsTabState extends State<StudentsTab> {
   bool _isLoading = true;
   String? _error;
   String? _selectedBranch = 'All';
-  final List<String> _branches = ['All', 'CSE', 'ECE', 'MECH', 'IT', 'CSBS'];
+  final List<String> _branches = ['All', 'CSE', 'ECE', 'MECH', 'IT', 'CSBS', 'AEI'];
 
   @override
   void initState() {
@@ -529,7 +529,7 @@ class _BranchTabState extends State<BranchTab> {
                   child: DropdownButton<String>(
                     value: _selectedBranch,
                     dropdownColor: const Color(0xFF1D1E33),
-                    items: ['CSE', 'ECE', 'MECH', 'IT', 'CSBS'].map((String b) {
+                    items: ['CSE', 'ECE', 'MECH', 'IT', 'CSBS', 'AEI'].map((String b) {
                       return DropdownMenuItem<String>(value: b, child: Text(b, style: const TextStyle(fontWeight: FontWeight.bold)));
                     }).toList(),
                     onChanged: (String? val) { if(val != null) { setState(() => _selectedBranch = val); _loadBranchData(); } },

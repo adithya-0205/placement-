@@ -60,4 +60,32 @@ class ApiConfig {
       throw Exception("Failed to load industry news");
     }
   }
+
+  static Future<String> fetchNewsSummary(String title) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/news/summary'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'title': title}),
+      );
+      if (response.statusCode == 200) {
+        return json.decode(response.body)['summary'];
+      }
+    } catch (e) {
+      print("Summary fetch error: $e");
+    }
+    return title; // Fallback to title
+  }
+
+  static Future<String> fetchIndustryTrendsBriefing() async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/news/trends-briefing'));
+      if (response.statusCode == 200) {
+        return json.decode(response.body)['briefing'];
+      }
+    } catch (e) {
+      print("Trends Briefing fetch error: \$e");
+    }
+    return "The industry is evolving rapidly. Keep practicing your core skills.";
+  }
 }

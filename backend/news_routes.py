@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException
 import requests
-from typing import List, Dict
+import ollama
+from typing import List, Dict, Optional
+from pydantic import BaseModel
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -14,7 +16,7 @@ news_cache = {
 CACHE_DURATION = 600  # 10 minutes
 
 def fetch_story(story_id):
-    """Worker function to fetch a single story's details."""
+    """Worker function to fetch a single story's details (Synchronous)."""
     try:
         item_url = f"https://hacker-news.firebaseio.com/v0/item/{story_id}.json"
         res = requests.get(item_url, timeout=5)
@@ -25,10 +27,10 @@ def fetch_story(story_id):
     return None
 
 @router.get("/latest")
-async def get_latest_news():
+def get_latest_news():
     """
     Fetch top stories from Hacker News and filter for industry/tech trends.
-    Uses parallel fetching for high performance.
+    Using 'def' instead of 'async def' to run this blocking code in a thread pool.
     """
     global news_cache
     
@@ -44,11 +46,12 @@ async def get_latest_news():
     ]
 
     try:
+        print("📰 Fetching latest industry news...")
         # 1. Get top story IDs
         top_ids_url = "https://hacker-news.firebaseio.com/v0/topstories.json"
         response = requests.get(top_ids_url, timeout=10)
         response.raise_for_status()
-        top_ids = response.json()[:80] # Check more stories for better filtering
+        top_ids = response.json()[:80]
 
         # 2. Parallel fetch story details
         with ThreadPoolExecutor(max_workers=20) as executor:
@@ -88,11 +91,103 @@ async def get_latest_news():
                     })
                 if len(stories) >= 10: break
 
+        print(f"✅ Successfully fetched {len(stories)} stories.")
         news_cache["data"] = stories
         news_cache["last_updated"] = current_time
         return stories
 
     except Exception as e:
-        print(f"Error fetching news: {e}")
+        print(f"❌ Error fetching news: {e}")
         if news_cache["data"]: return news_cache["data"]
-        raise HTTPException(status_code=500, detail="Failed to fetch industry news")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch industry news: {str(e)}")
+
+class SummaryRequest(BaseModel):
+    title: str
+    url: Optional[str] = None
+
+@router.post("/summary")
+def get_news_summary(request: SummaryRequest):
+    """
+    Generate a 1-sentence summary (Synchronous).
+    Using 'def' allows this blocking AI call to run in a thread pool.
+    """
+    try:
+        print(f"🤖 Summarizing: {request.title}")
+        prompt = f"Summarize this tech news title into a single concise, professional sentence for a student's placement preparation: '{request.title}'. Focus on its industry significance. Do NOT include any introductory text or quotes."
+        
+        response = ollama.generate(
+            model='llama3.1:latest',
+            prompt=prompt,
+            options={'num_predict': 100, 'temperature': 0.7}
+        )
+        
+        summary = response.get('response', '').strip()
+        if not summary:
+            return {"summary": request.title}
+            
+        return {"summary": summary}
+    except Exception as e:
+        print(f"⚠️ Error generating summary: {e}")
+        return {"summary": request.title}
+
+# Cache for the collective briefing
+briefing_cache = {
+    "text": "",
+    "last_updated": 0
+}
+
+@router.get("/trends-briefing")
+def get_trends_briefing():
+    """
+    Generates a collective AI briefing from the current top news stories.
+    Using 'def' allows this blocking AI call to run in a thread pool.
+    """
+    global briefing_cache
+    current_time = time.time()
+    
+    # Return cached briefing if it's less than 30 minutes old
+    if briefing_cache["text"] and (current_time - briefing_cache["last_updated"] < 1800):
+        return {"briefing": briefing_cache["text"]}
+
+    try:
+        # 1. Get the latest news from our existing function (which uses its own cache)
+        latest_news = get_latest_news()
+        
+        if not latest_news:
+            return {"briefing": "Currently, there are no major tech trends to report. Please check back later."}
+
+        # 2. Extract titles (limit to top 10 for context size)
+        titles = [item.get("title", "") for item in latest_news[:10] if item.get("title")]
+        titles_text = "\n- ".join(titles)
+
+        print("🤖 Generating collective industry briefing...")
+        prompt = f"""
+        You are an expert career advisor for engineering students.
+        Based on the following recent Hacker News tech headlines, write a cohesive, professional 3-sentence briefing summarizing the current state or major movements in the tech industry. 
+        Focus on what these trends mean for a student preparing for placements (e.g., AI adoption, hiring shifts, new technologies).
+        Do not list the headlines, synthesize them into a paragraph. Do not use quotes or introductory phrases. Make it sound like a professional radio briefing.
+
+        Headlines:
+        - {titles_text}
+        """
+        
+        response = ollama.generate(
+            model='llama3.1:latest',
+            prompt=prompt,
+            options={'num_predict': 150, 'temperature': 0.7}
+        )
+        
+        briefing = response.get('response', '').strip()
+        
+        if not briefing:
+            return {"briefing": "The industry is currently focused on rapid technological advancements. Continue focusing on core engineering skills and AI adaptability."}
+            
+        # Update cache
+        briefing_cache["text"] = briefing
+        briefing_cache["last_updated"] = current_time
+            
+        return {"briefing": briefing}
+        
+    except Exception as e:
+        print(f"⚠️ Error generating trends briefing: {e}")
+        return {"briefing": "We are currently unable to generate the industry briefing. Please stay focused on your core technical preparation."}
