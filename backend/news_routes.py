@@ -116,7 +116,7 @@ def get_news_summary(request: SummaryRequest):
         prompt = f"Summarize this tech news title into a single concise, professional sentence for a student's placement preparation: '{request.title}'. Focus on its industry significance. Do NOT include any introductory text or quotes."
         
         response = ollama.generate(
-            model='llama3.1:latest',
+            model='llama3',
             prompt=prompt,
             options={'num_predict': 100, 'temperature': 0.7}
         )
@@ -172,7 +172,7 @@ def get_trends_briefing():
         """
         
         response = ollama.generate(
-            model='llama3.1:latest',
+            model='llama3',
             prompt=prompt,
             options={'num_predict': 150, 'temperature': 0.7}
         )

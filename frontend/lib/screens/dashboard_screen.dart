@@ -111,12 +111,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         setState(() {
           data = jsonDecode(res1.body);
           if (res2.statusCode == 200) weeklyData = jsonDecode(res2.body);
-          loading = false;
         });
       }
     } catch (e) {
-      debugPrint(e.toString());
-      setState(() => loading = false);
+      debugPrint("LOAD DATA ERROR: $e");
+    } finally {
+      if (mounted) setState(() => loading = false);
     }
   }
 
@@ -176,8 +176,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           _buildTopSection(auth),
           const SizedBox(height: 32),
-          _buildAchievementsSection(),
-          const SizedBox(height: 32),
           _buildMiddleSection(context),
           const SizedBox(height: 32),
           _buildFocusAreas(),
@@ -191,6 +189,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // --- TOP SECTION: Level & Weekly Progress ---
   Widget _buildTopSection(AuthProvider auth) {
     double progress = (data?['weekly_progress'] ?? 0.0) / 100.0;
+    final int streak = weeklyData?['streak'] ?? 0;
+    final int branchRank = weeklyData?['branch_rank'] ?? 0;
     
     return Container(
       padding: const EdgeInsets.all(24),
@@ -212,9 +212,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Text("Level ${data?['technical_level'] ?? 1}", style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
                 ],
               ),
-              const Icon(Icons.stars, color: Colors.white, size: 40),
+              if (branchRank > 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2), 
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white.withOpacity(0.4)),
+                  ),
+                  child: Text("Rank: #$branchRank", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+                )
+              else
+                const Icon(Icons.stars, color: Colors.white, size: 40),
             ],
           ),
+          if (streak > 0) ...[
+            const SizedBox(height: 15),
+            Row(
+              children: [
+                const Text("🔥", style: TextStyle(fontSize: 20)),
+                const SizedBox(width: 8),
+                Text("$streak Day Practice Streak", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+              ],
+            ),
+          ],
           const SizedBox(height: 20),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -573,7 +594,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         itemCount: newsData!.length,
                         itemBuilder: (context, index) {
                           final item = newsData![index];
-                          return _buildNewsCard(item);
+                          return _newsCardItem(item);
                         },
                       ),
           ),
@@ -635,10 +656,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildNewsCard(dynamic item) {
-    return _newsCardItem(item);
-  }
-
   Widget _newsCardItem(dynamic item, {bool isPopup = false}) {
     return Card(
       color: isPopup ? Colors.white.withOpacity(0.08) : Colors.white.withOpacity(0.05),
@@ -654,12 +671,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             style: const TextStyle(color: Colors.white38, fontSize: 11),
           ),
         ),
-        onTap: () async {
-          final url = Uri.parse(item['url']);
-          if (await canLaunchUrl(url)) {
-            await launchUrl(url, mode: LaunchMode.externalApplication);
-          }
-        },
+        onTap: () => showNewsSummaryDialog(context, item),
       ),
     );
   }
@@ -715,10 +727,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 _sidebarTile(5, Icons.auto_graph, "Industry Trends", onTap: () {
                   setState(() => _selectedIndex = 5);
                   _loadNews();
-                }),
-
-                _sidebarTile(6, Icons.workspace_premium_outlined, "Wall of Fame", onTap: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const LeaderboardScreen()));
                 }),
 
                 const Spacer(),
@@ -807,23 +815,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildGraphSection() {
-    List<FlSpot> aptSpots = [];
-    List<FlSpot> techSpots = [];
+    Map<int, FlSpot> aptitudeSpotsMap = {};
+    Map<int, FlSpot> technicalSpotsMap = {};
+    final List<String> days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     
-    if (weeklyData != null && weeklyData!['has_data'] == true) {
-      final aptData = weeklyData!['aptitude_daily'] as List;
-      final techData = weeklyData!['technical_daily'] as List;
+    if (data != null && data!['current_week_daily'] != null) {
+      final dailyData = data!['current_week_daily'] as Map;
+      final int todayWeekday = DateTime.now().weekday - 1; // 0=Mon, 6=Sun
       
-      for (int i = 0; i < aptData.length; i++) {
-        aptSpots.add(FlSpot(i.toDouble(), double.tryParse(aptData[i]['score'].toString()) ?? 0));
+      if (dailyData['aptitude'] != null) {
+        final list = dailyData['aptitude'] as List;
+        for (var item in list) {
+          DateTime dt = DateTime.parse(item['day']);
+          int weekday = dt.weekday - 1;
+          if (weekday <= todayWeekday) {
+            aptitudeSpotsMap[weekday] = FlSpot(weekday.toDouble(), double.tryParse(item['score'].toString()) ?? 0);
+          }
+        }
       }
-      for (int i = 0; i < techData.length; i++) {
-        techSpots.add(FlSpot(i.toDouble(), double.tryParse(techData[i]['score'].toString()) ?? 0));
+      
+      if (dailyData['technical'] != null) {
+        final list = dailyData['technical'] as List;
+        for (var item in list) {
+          DateTime dt = DateTime.parse(item['day']);
+          int weekday = dt.weekday - 1;
+          if (weekday <= todayWeekday) {
+            technicalSpotsMap[weekday] = FlSpot(weekday.toDouble(), double.tryParse(item['score'].toString()) ?? 0);
+          }
+        }
       }
     }
 
-    if (aptSpots.isEmpty) aptSpots = [const FlSpot(0, 0), const FlSpot(6, 0)];
-    if (techSpots.isEmpty) techSpots = [const FlSpot(0, 0), const FlSpot(6, 0)];
+    List<FlSpot> aptitudeSpots = aptitudeSpotsMap.values.toList()..sort((a, b) => a.x.compareTo(b.x));
+    List<FlSpot> technicalSpots = technicalSpotsMap.values.toList()..sort((a, b) => a.x.compareTo(b.x));
 
     return Container(
       height: 300,
@@ -835,12 +859,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text("Performance Trends (Last 7 Days)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              const Text("Recent Performance (First Attempts)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               Row(
                 children: [
-                  _legendItem("Aptitude", Colors.blueAccent),
-                  const SizedBox(width: 15),
-                  _legendItem("Technical", Colors.cyanAccent),
+                   _legendItem("Aptitude", Colors.cyanAccent),
+                   const SizedBox(width: 15),
+                   _legendItem("Technical", Colors.orangeAccent),
                 ],
               )
             ],
@@ -851,6 +875,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               LineChartData(
                 minY: 0,
                 maxY: 10,
+                minX: 0,
+                maxX: 6,
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
@@ -862,19 +888,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   bottomTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
+                      interval: 1,
                       getTitlesWidget: (value, meta) {
                         int index = value.toInt();
-                        if (weeklyData?['has_data'] == true) {
-                          final aptData = weeklyData!['aptitude_daily'] as List;
-                          if (index >= 0 && index < aptData.length) {
-                             String time = aptData[index]['time']?.toString() ?? "";
-                             if (time.length >= 10) {
-                               return Text(
-                                 time.substring(5, 10), // MM-DD
-                                 style: const TextStyle(color: Colors.white38, fontSize: 10)
-                               );
-                             }
-                          }
+                        if (index >= 0 && index < days.length) {
+                          return Text(days[index], style: const TextStyle(color: Colors.white38, fontSize: 10));
                         }
                         return const Text("");
                       },
@@ -883,22 +901,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 borderData: FlBorderData(show: false),
                 lineBarsData: [
-                  LineChartBarData(
-                    spots: aptSpots,
-                    isCurved: true,
-                    color: Colors.blueAccent,
-                    barWidth: 3,
-                    dotData: const FlDotData(show: true),
-                    belowBarData: BarAreaData(show: true, color: Colors.blueAccent.withOpacity(0.05)),
-                  ),
-                  LineChartBarData(
-                    spots: techSpots,
-                    isCurved: true,
-                    color: Colors.cyanAccent,
-                    barWidth: 3,
-                    dotData: const FlDotData(show: true),
-                    belowBarData: BarAreaData(show: true, color: Colors.cyanAccent.withOpacity(0.05)),
-                  ),
+                  if (aptitudeSpots.isNotEmpty)
+                    LineChartBarData(
+                      spots: aptitudeSpots,
+                      isCurved: aptitudeSpots.length > 1,
+                      color: Colors.cyanAccent,
+                      barWidth: 3,
+                      dotData: FlDotData(
+                        show: true,
+                        getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(
+                          radius: 4,
+                          color: Colors.cyanAccent,
+                          strokeWidth: 2,
+                          strokeColor: const Color(0xFF161625),
+                        ),
+                      ),
+                      belowBarData: BarAreaData(show: true, color: Colors.cyanAccent.withOpacity(0.05)),
+                    ),
+                  if (technicalSpots.isNotEmpty)
+                    LineChartBarData(
+                      spots: technicalSpots,
+                      isCurved: technicalSpots.length > 1,
+                      color: Colors.orangeAccent,
+                      barWidth: 3,
+                      dotData: FlDotData(
+                        show: true,
+                        getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(
+                          radius: 4,
+                          color: Colors.orangeAccent,
+                          strokeWidth: 2,
+                          strokeColor: const Color(0xFF161625),
+                        ),
+                      ),
+                      belowBarData: BarAreaData(show: true, color: Colors.orangeAccent.withOpacity(0.05)),
+                    ),
+                  // Fallback empty line to keep axes if both empty
+                  if (aptitudeSpots.isEmpty && technicalSpots.isEmpty)
+                    LineChartBarData(
+                      spots: [const FlSpot(0, 0), const FlSpot(6, 0)],
+                      color: Colors.transparent,
+                    ),
                 ],
               ),
             ),
@@ -1108,13 +1150,47 @@ class _TrendsDialogState extends State<_TrendsDialog> {
              await _flutterTts.speak(summary);
           },
         ),
-        onTap: () async {
-          final url = Uri.parse(item['url']);
-          if (await canLaunchUrl(url)) {
-            await launchUrl(url, mode: LaunchMode.externalApplication);
-          }
-        },
+        onTap: () => showNewsSummaryDialog(context, item),
       ),
     );
   }
+}
+
+void showNewsSummaryDialog(BuildContext context, dynamic item) {
+  showDialog(
+    context: context,
+    barrierDismissible: true,
+    builder: (context) => FutureBuilder<String>(
+      future: ApiConfig.fetchNewsSummary(item['title'] ?? ''),
+      builder: (context, snapshot) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF161625),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text(item['title'] ?? 'News Summary', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          content: snapshot.connectionState == ConnectionState.waiting
+              ? const SizedBox(height: 100, child: Center(child: CircularProgressIndicator(color: Colors.purpleAccent)))
+              : Text(
+                  snapshot.data ?? "Failed to load summary.",
+                  style: const TextStyle(color: Colors.white70, height: 1.5, fontSize: 14),
+                ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Close", style: TextStyle(color: Colors.purpleAccent)),
+            ),
+            if (item['url'] != null)
+              TextButton(
+                onPressed: () async {
+                  final url = Uri.parse(item['url']);
+                  if (await canLaunchUrl(url)) {
+                    await launchUrl(url, mode: LaunchMode.externalApplication);
+                  }
+                },
+                child: const Text("Read Source", style: TextStyle(color: Colors.white38, fontSize: 12)),
+              ),
+          ],
+        );
+      },
+    ),
+  );
 }

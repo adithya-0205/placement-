@@ -66,19 +66,19 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
                     const SizedBox(height: 24),
                     _buildQuickStats(),
                     const SizedBox(height: 32),
-                    _sectionHeader("Daily Momentum", "Performance trends over the last 7 sessions"),
+                    _sectionHeader("Daily Momentum", "Performance trends for current week (First Attempts)"),
                     const SizedBox(height: 16),
                     _buildDailyChart(),
+                    const SizedBox(height: 32),
+                    _sectionHeader("Weekly Milestone Progress", "Holistic growth (Apt + Tech + GD + Interview)"),
+                    const SizedBox(height: 16),
+                    _buildCumulativeWeeklyChart(),
                     const SizedBox(height: 32),
                     _sectionHeader("Skill Profile", "Areas where you excel and areas for growth"),
                     const SizedBox(height: 16),
                     _buildSkillProfile(),
                     const SizedBox(height: 32),
-                    _sectionHeader("Mastery Wall", "Your collection of earned placement badges"),
-                    const SizedBox(height: 16),
-                    _buildMasteryWall(),
-                    const SizedBox(height: 32),
-                    _sectionHeader("Weekly Growth", "Success in GD & Interviews over the month"),
+                    _sectionHeader("Session Growth", "Success in GD & Interviews over the month"),
                     const SizedBox(height: 16),
                     _buildWeeklyChart(),
                     const SizedBox(height: 40),
@@ -190,8 +190,39 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
   }
 
   Widget _buildDailyChart() {
-    List<FlSpot> aptSpots = _getSpots(reportData['aptitude_daily']);
-    List<FlSpot> techSpots = _getSpots(reportData['technical_daily']);
+    Map<int, FlSpot> aptitudeSpotsMap = {};
+    Map<int, FlSpot> technicalSpotsMap = {};
+    final List<String> days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    
+    if (dashboardData['current_week_daily'] != null) {
+      final dailyData = dashboardData['current_week_daily'] as Map;
+      final int todayWeekday = DateTime.now().weekday - 1;
+      
+      if (dailyData['aptitude'] != null) {
+        final list = dailyData['aptitude'] as List;
+        for (var item in list) {
+          DateTime dt = DateTime.parse(item['day']);
+          int weekday = dt.weekday - 1;
+          if (weekday <= todayWeekday) {
+            aptitudeSpotsMap[weekday] = FlSpot(weekday.toDouble(), double.tryParse(item['score'].toString()) ?? 0);
+          }
+        }
+      }
+      
+      if (dailyData['technical'] != null) {
+        final list = dailyData['technical'] as List;
+        for (var item in list) {
+          DateTime dt = DateTime.parse(item['day']);
+          int weekday = dt.weekday - 1;
+          if (weekday <= todayWeekday) {
+            technicalSpotsMap[weekday] = FlSpot(weekday.toDouble(), double.tryParse(item['score'].toString()) ?? 0);
+          }
+        }
+      }
+    }
+
+    List<FlSpot> aptitudeSpots = aptitudeSpotsMap.values.toList()..sort((a, b) => a.x.compareTo(b.x));
+    List<FlSpot> technicalSpots = technicalSpotsMap.values.toList()..sort((a, b) => a.x.compareTo(b.x));
 
     return _glassCard(
       padding: const EdgeInsets.fromLTRB(10, 24, 20, 16),
@@ -200,9 +231,9 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _legendItem("Aptitude", Colors.indigoAccent),
+              _legendItem("Aptitude", Colors.cyanAccent),
               const SizedBox(width: 20),
-              _legendItem("Technical", Colors.greenAccent),
+              _legendItem("Technical", Colors.orangeAccent),
             ],
           ),
           const SizedBox(height: 24),
@@ -210,12 +241,32 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
             height: 200,
             child: LineChart(
               LineChartData(
+                minY: 0,
+                maxY: 10,
+                minX: 0,
+                maxX: 6,
                 gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (v) => FlLine(color: Colors.white.withOpacity(0.05), strokeWidth: 1)),
-                titlesData: _chartTitles(),
+                titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 25, getTitlesWidget: (v, m) => Text(v.toInt().toString(), style: const TextStyle(color: Colors.white24, fontSize: 10)))),
+                  bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, interval: 1, getTitlesWidget: (v, m) {
+                    int idx = v.toInt();
+                    if (idx >= 0 && idx < days.length) return Text(days[idx], style: const TextStyle(color: Colors.white24, fontSize: 10));
+                    return const Text("");
+                  })),
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                ),
                 borderData: FlBorderData(show: false),
                 lineBarsData: [
-                  _lineData(aptSpots, Colors.indigoAccent),
-                  _lineData(techSpots, Colors.greenAccent),
+                  if (aptitudeSpots.isNotEmpty)
+                    _lineData(aptitudeSpots, Colors.cyanAccent),
+                  if (technicalSpots.isNotEmpty)
+                    _lineData(technicalSpots, Colors.orangeAccent),
+                  if (aptitudeSpots.isEmpty && technicalSpots.isEmpty)
+                    LineChartBarData(
+                      spots: [const FlSpot(0, 0), const FlSpot(6, 0)],
+                      color: Colors.transparent,
+                    ),
                 ],
               ),
             ),
@@ -223,6 +274,81 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
         ],
       ),
     );
+  }
+
+  Widget _buildCumulativeWeeklyChart() {
+    List data = reportData['cumulative_weekly'] ?? [];
+    List<FlSpot> spots = [];
+    for (int i = 0; i < data.length; i++) {
+      spots.add(FlSpot(i.toDouble(), (data[i]['score'] as num).toDouble()));
+    }
+
+    return _glassCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        children: [
+          const Text("Cumulative Growth (Apt + Tech + GD + Interview)", style: TextStyle(color: Colors.white54, fontSize: 11)),
+          const SizedBox(height: 20),
+          SizedBox(
+            height: 180,
+            child: LineChart(
+              LineChartData(
+                minY: 0,
+                minX: 0,
+                maxX: spots.isEmpty ? 3 : (spots.length - 1).toDouble(),
+                gridData: FlGridData(show: true, drawVerticalLine: false, getDrawingHorizontalLine: (v) => FlLine(color: Colors.white.withOpacity(0.05), strokeWidth: 1)),
+                titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 30, getTitlesWidget: (v, m) => Text(v.toInt().toString(), style: const TextStyle(color: Colors.white24, fontSize: 10)))),
+                  bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, interval: 1, getTitlesWidget: (v, m) => Text("W${v.toInt() + 1}", style: const TextStyle(color: Colors.white24, fontSize: 10)))),
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                ),
+                borderData: FlBorderData(show: false),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: spots.isEmpty ? [const FlSpot(0, 0)] : spots,
+                    isCurved: spots.length > 1,
+                    color: Colors.indigoAccent,
+                    barWidth: 4,
+                    dotData: FlDotData(
+                      show: true,
+                      getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(
+                        radius: 5,
+                        color: Colors.indigoAccent,
+                        strokeWidth: 2,
+                        strokeColor: const Color(0xFF0F172A),
+                      ),
+                    ),
+                    belowBarData: BarAreaData(show: true, gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.indigoAccent.withOpacity(0.2), Colors.indigoAccent.withOpacity(0.01)])),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<BarChartGroupData> _getCumulativeBarGroups() {
+    List data = reportData['cumulative_weekly'] ?? [];
+    if (data.isEmpty) return [];
+
+    return List.generate(data.length, (i) {
+      double totalScore = (data[i]['score'] as num).toDouble();
+      return BarChartGroupData(
+        x: i,
+        barRods: [
+          BarChartRodData(
+            toY: totalScore, 
+            color: Colors.indigoAccent, 
+            width: 20, 
+            borderRadius: const BorderRadius.only(topLeft: Radius.circular(6), topRight: Radius.circular(6)),
+            backDrawRodData: BackgroundBarChartRodData(show: true, toY: 100, color: Colors.white.withOpacity(0.05))
+          ),
+        ],
+      );
+    });
   }
 
   Widget _buildSkillProfile() {
@@ -270,52 +396,6 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
         ],
       ),
     );
-  }
-
-  Widget _buildMasteryWall() {
-    final badges = reportData['badges'] ?? [];
-    if (badges.isEmpty) return _glassCard(padding: const EdgeInsets.all(20), child: const Text("Unlock your first badge by mastering a topic!", style: TextStyle(color: Colors.white24, fontSize: 13, fontStyle: FontStyle.italic)));
-
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 12, mainAxisSpacing: 12, childAspectRatio: 0.9),
-      itemCount: badges.length,
-      itemBuilder: (context, index) {
-        final badge = badges[index];
-        return _glassCard(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(_badgeIcon(badge['icon']), color: _getBadgeColor(badge['color']), size: 32),
-              const SizedBox(height: 8),
-              Text(badge['name'], textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  IconData _badgeIcon(String name) {
-    switch (name) {
-      case 'emoji_events': return Icons.emoji_events;
-      case 'whatshot': return Icons.whatshot;
-      case 'record_voice_over': return Icons.record_voice_over;
-      case 'face': return Icons.face;
-      default: return Icons.stars;
-    }
-  }
-
-  Color _getBadgeColor(String name) {
-    switch (name) {
-      case 'gold': return Colors.amber;
-      case 'orange': return Colors.orangeAccent;
-      case 'blue': return Colors.blueAccent;
-      case 'purple': return Colors.purpleAccent;
-      default: return Colors.indigoAccent;
-    }
   }
 
   Widget _buildWeeklyChart() {
@@ -399,7 +479,7 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
   FlTitlesData _barTitles() {
     return FlTitlesData(
       leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-      bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, getTitlesWidget: (v, m) => Text("Week ${v.toInt() + 1}", style: const TextStyle(color: Colors.white24, fontSize: 10)))),
+      bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, interval: 1, getTitlesWidget: (v, m) => Text("W${v.toInt() + 1}", style: const TextStyle(color: Colors.white24, fontSize: 10)))),
       rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
       topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
     );
@@ -417,8 +497,8 @@ class _PerformanceGraphState extends State<PerformanceGraph> {
       return BarChartGroupData(
         x: i,
         barRods: [
-          BarChartRodData(toY: gdScore, color: Colors.orangeAccent, width: 10, borderRadius: BorderRadius.circular(4)),
-          BarChartRodData(toY: intScore, color: Colors.pinkAccent, width: 10, borderRadius: BorderRadius.circular(4)),
+          BarChartRodData(toY: gdScore, color: Colors.orangeAccent, width: 8, borderRadius: BorderRadius.circular(4)),
+          BarChartRodData(toY: intScore, color: Colors.pinkAccent, width: 8, borderRadius: BorderRadius.circular(4)),
         ],
       );
     });

@@ -449,22 +449,10 @@ def get_todays_questions(db: Session, username: str, category: str, target_branc
         if valid_candidates:
             selected_qid = random.choice(valid_candidates)
         else:
-            # Need more! Trigger AI generation for 1 question
-            print(f"✨ Area '{best_area}' has deficit but no fresh questions. Generating...")
-            new_ai_ids = generate_questions_ai(
-                branch=branch_val,
-                category=category,
-                area=best_area,
-                difficulty_text=difficulty,
-                count=1
-            )
-            if new_ai_ids:
-                selected_qid = new_ai_ids[0]
-            else:
-                # Fallback: allow repeats if AI fails
-                repeats = [qid for qid in area_candidates if qid not in question_ids]
-                if repeats:
-                    selected_qid = random.choice(repeats)
+            # Need more! Fallback: allow repeats if AI is disabled
+            repeats = [qid for qid in area_candidates if qid not in question_ids]
+            if repeats:
+                selected_qid = random.choice(repeats)
         
         if selected_qid:
             question_ids.append(selected_qid)
@@ -922,18 +910,24 @@ async def get_quiz_status(username: str, category: str, db: Session = Depends(ge
 async def get_weekly_report(username: str, db: Session = Depends(get_db)):
     """Get performance analytics with daily and weekly aggregations"""
     try:
-        # 1. Daily Aggregation for Aptitude and Technical (Last 7 Days)
-        def get_daily_agg(cat_name):
+        # 1. Daily Aggregation for Aptitude and Technical combined (First attempt only)
+        def get_daily_agg():
             res = db.execute(
                 text("""
-                    SELECT DATE(timestamp) as day, AVG(score) as avg_score
-                    FROM results 
-                    WHERE username = :username AND category = :category
-                    AND timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-                    GROUP BY DATE(timestamp)
+                    SELECT DATE(r.timestamp) as day, AVG(r.score) as avg_score
+                    FROM results r
+                    INNER JOIN (
+                        SELECT MIN(timestamp) as first_time
+                        FROM results
+                        WHERE username = :username AND category IN ('APTITUDE', 'TECHNICAL')
+                        AND timestamp >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+                        GROUP BY DATE(timestamp), category
+                    ) sub ON r.timestamp = sub.first_time
+                    WHERE r.username = :username AND r.category IN ('APTITUDE', 'TECHNICAL')
+                    GROUP BY DATE(r.timestamp)
                     ORDER BY day ASC
                 """),
-                {"username": username.strip(), "category": cat_name}
+                {"username": username.strip()}
             )
             return [{"score": round(float(r[1]), 1), "time": str(r[0])} for r in res.fetchall()]
 
@@ -952,10 +946,30 @@ async def get_weekly_report(username: str, db: Session = Depends(get_db)):
             )
             return [{"score": round(float(r[1]), 1), "week_start": str(r[2])} for r in res.fetchall()]
 
-        aptitude_daily = get_daily_agg("APTITUDE")
-        technical_daily = get_daily_agg("TECHNICAL")
+        # 2b. Cumulative Weekly Growth (Sum of first attempts for all 4 categories)
+        def get_cumulative_weekly():
+            res = db.execute(
+                text("""
+                    SELECT YEARWEEK(r.timestamp) as week, SUM(r.score) as total_score, MIN(DATE(r.timestamp)) as week_start
+                    FROM results r
+                    INNER JOIN (
+                        SELECT MIN(timestamp) as first_time
+                        FROM results
+                        WHERE username = :username AND category IN ('APTITUDE', 'TECHNICAL', 'GD', 'INTERVIEW')
+                        GROUP BY DATE(timestamp), category
+                    ) sub ON r.timestamp = sub.first_time
+                    WHERE r.username = :username
+                    GROUP BY YEARWEEK(r.timestamp)
+                    ORDER BY week ASC
+                """),
+                {"username": username.strip()}
+            )
+            return [{"score": int(r[1]), "week_start": str(r[2])} for r in res.fetchall()]
+
+        overall_daily = get_daily_agg()
         gd_weekly = get_weekly_agg("GD")
         interview_weekly = get_weekly_agg("INTERVIEW")
+        cumulative_weekly = get_cumulative_weekly()
 
         # 3. Consistency Streak
         streak_query = db.execute(
@@ -1004,12 +1018,75 @@ async def get_weekly_report(username: str, db: Session = Depends(get_db)):
             badges.append({"name": "GD Eloquent", "icon": "record_voice_over", "color": "blue"})
             
         # Interview Ace (Avg overall > 8.5 + min 3 sessions)
-        # Assuming we have a mock_interviews or similar table, or using results if categorized
         int_res = db.execute(
             text("SELECT AVG(score), COUNT(*) FROM results WHERE username = :u AND category = 'INTERVIEW'"),
             {"u": username.strip()}
         ).fetchone()
         if int_res and int_res[0] and int_res[0] >= 8.5 and int_res[1] >= 3:
+            badges.append({"name": "Interview Ace", "icon": "work", "color": "purple"})
+
+        # 6. Branch Rank Calculation
+        # To determine rank, we fetch the branch leaderboard and find this user's position
+        user_res = db.execute(
+            text("SELECT branch FROM users WHERE username = :username"),
+            {"username": username.strip()}
+        ).fetchone()
+        branch_rank = 0
+        if user_res and user_res[0]:
+            user_branch = user_res[0]
+            # Fast inline fetch of leaderboard logic for rank calculation
+            all_users = db.execute(
+                text("SELECT username FROM users WHERE branch = :b AND role = 'student'"),
+                {"b": user_branch}
+            ).fetchall()
+            
+            ranks = []
+            for u_row in all_users:
+                uname = u_row[0]
+                u_streak = 0
+                u_curr = date.today()
+                while True:
+                    cnt = db.execute(
+                        text("SELECT COUNT(*) FROM results WHERE username = :u AND DATE(timestamp) = :d"),
+                        {"u": uname, "d": u_curr}
+                    ).fetchone()[0]
+                    if cnt > 0:
+                        u_streak += 1
+                        u_curr -= timedelta(days=1)
+                    else:
+                        break
+                
+                u_avg_res = db.execute(
+                    text("SELECT AVG(score) FROM results WHERE username = :u AND timestamp >= DATE_SUB(Now(), INTERVAL 7 DAY)"),
+                    {"u": uname}
+                ).scalar()
+                u_latest_avg = float(u_avg_res or 0)
+                
+                # Fetch retries for penalty correctly
+                totals_res = db.execute(
+                    text("""
+                        SELECT 
+                            COUNT(*) as total_attempts,
+                            COUNT(DISTINCT DATE(timestamp)) as unique_days
+                        FROM results 
+                        WHERE username = :u AND timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                    """),
+                    {"u": uname}
+                ).fetchone()
+                
+                unq_days = totals_res[1] or 0
+                tot_att = totals_res[0] or 0
+                retries = max(0, tot_att - unq_days)
+                
+                # Formula with penalty
+                u_readiness = max(0, min(100, (u_latest_avg * 8.5) + (min(u_streak, 7) * 2.1) - (retries * 0.5)))
+                ranks.append((uname, u_readiness))
+            
+            ranks.sort(key=lambda x: x[1], reverse=True)
+            for idx, (ranked_uname, _) in enumerate(ranks):
+                if ranked_uname.lower() == username.strip().lower():
+                    branch_rank = idx + 1
+                    break
             badges.append({"name": "Interview Ace", "icon": "face", "color": "purple"})
 
         # 6. Calculate status and Readiness
@@ -1030,17 +1107,19 @@ async def get_weekly_report(username: str, db: Session = Depends(get_db)):
         elif latest_avg >= 5: status = "Intermediate"
 
         return {
-            "has_data": any([aptitude_daily, technical_daily, gd_weekly, interview_weekly]),
-            "aptitude_daily": aptitude_daily,
-            "technical_daily": technical_daily,
+            "has_data": any([overall_daily, gd_weekly, interview_weekly]),
+            "overall_daily": overall_daily,
             "gd_weekly": gd_weekly,
             "interview_weekly": interview_weekly,
+            "cumulative_weekly": cumulative_weekly,
             "status": status,
             "current_performance": round(latest_avg, 1),
             "streak": streak,
             "strong_areas": strong_areas,
             "readiness_score": round(readiness_score, 1),
-            "badges": badges
+            "badges": badges,
+            "streak": streak,
+            "branch_rank": branch_rank
         }
     except Exception as e:
         print(f"Error in weekly_report: {e}")
@@ -1077,7 +1156,7 @@ async def get_branch_leaderboard(branch: str, db: Session = Depends(get_db)):
                 else:
                     break
             
-            # 3. Calculate Latest Avg (Past 7 days)
+            # 3. Calculate Latest Avg
             avg_res = db.execute(
                 text("""
                     SELECT AVG(score) FROM results 
@@ -1087,8 +1166,25 @@ async def get_branch_leaderboard(branch: str, db: Session = Depends(get_db)):
             ).scalar()
             latest_avg = float(avg_res or 0)
 
-            # 4. Final Readiness Score
+            # 3b. Calculate Penalty for Multiple Attempts (Retries)
+            totals_res = db.execute(
+                text("""
+                    SELECT 
+                        COUNT(*) as total_attempts,
+                        COUNT(DISTINCT DATE(timestamp)) as unique_days
+                    FROM results 
+                    WHERE username = :u AND timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                """),
+                {"u": uname}
+            ).fetchone()
+            
+            unique_days = totals_res[1] or 0
+            total_attempts = totals_res[0] or 0
+            retries = max(0, total_attempts - unique_days)
+
+            # 4. Final Readiness Score = Base - Retry Penalty
             readiness = min(100, (latest_avg * 8.5) + (min(streak, 7) * 2.1))
+            readiness = max(0, readiness - (retries * 0.5))
             
             # 5. Get Badges Count
             badges_count = db.execute(
@@ -1237,6 +1333,37 @@ async def get_dashboard(username: str, db: Session = Depends(get_db)):
         avg_score = float(all_time_res[1] or 0)
         accuracy = (avg_score / 10.0) * 100
 
+        # 6. Recent Daily Performance (Strictly Current Week: Monday to Sunday)
+        current_week_daily = {
+            "aptitude": [],
+            "technical": []
+        }
+        
+        # Calculate most recent Monday
+        today = date.today()
+        monday = today - timedelta(days=today.weekday())
+        
+        print(f"DEBUG: Fetching dashboard for {username} since {monday}")
+        for cat in ["APTITUDE", "TECHNICAL"]:
+            res = db.execute(
+                text("""
+                    SELECT DATE(timestamp) as day, AVG(score) as avg_score, DAYNAME(timestamp) as day_name
+                    FROM results
+                    WHERE username = :username AND category = :cat
+                    AND timestamp >= :monday
+                    GROUP BY DATE(timestamp)
+                    ORDER BY day ASC
+                """),
+                {"username": username.strip(), "cat": cat, "monday": monday}
+            ).fetchall()
+            
+            print(f"DEBUG: Found {len(res)} results for {cat}")
+            
+            current_week_daily[cat.lower()] = [
+                {"day": str(row[0]), "score": float(row[1]), "day_name": (row[2] or "Day")[:3]} 
+                for row in res
+            ]
+
         return {
             "id": user.id,
             "username": user.username,
@@ -1256,7 +1383,8 @@ async def get_dashboard(username: str, db: Session = Depends(get_db)):
             },
             "weekly_progress": round(weekly_progress, 1),
             "total_attempts": total_attempts,
-            "accuracy": round(accuracy, 1)
+            "accuracy": round(accuracy, 1),
+            "current_week_daily": current_week_daily
         }
     except HTTPException:
         raise
@@ -1331,6 +1459,317 @@ Evaluate strictly. Return ONLY JSON:
     finally:
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
+
+import cv2
+import numpy as np
+from scipy.spatial import distance as dist
+
+# --- GLOBAL SESSION STORAGE ---
+session_answers = {}
+
+# --- MEDIAPIPE INITIALIZATION ---
+try:
+    import mediapipe as mp
+    from mediapipe.python.solutions import face_mesh as mp_face_mesh
+    MEDIAPIPE_AVAILABLE = True
+    test_mesh = mp_face_mesh.FaceMesh() 
+except Exception as e:
+    print(f"MediaPipe Load Error: {e}")
+    MEDIAPIPE_AVAILABLE = False
+
+# Indices for Behavioral Tracking
+L_EYE = [362, 385, 387, 263, 373, 380]
+R_EYE = [133, 158, 160, 33, 144, 153]
+IRIS_CENTER = 468 
+
+# --- BEHAVIORAL HELPERS ---
+def get_ear(eye_points):
+    A = dist.euclidean(eye_points[1], eye_points[5])
+    B = dist.euclidean(eye_points[2], eye_points[4])
+    C = dist.euclidean(eye_points[0], eye_points[3])
+    return (A + B) / (2.0 * C)
+
+def analyze_video_session(video_path):
+    if not MEDIAPIPE_AVAILABLE:
+        return {"eye_contact": "N/A", "blinks_per_min": 0, "demeanor": "Unknown"}
+    
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return {"eye_contact": "0%", "blinks_per_min": 0, "demeanor": "N/A"}
+
+    face_mesh = mp_face_mesh.FaceMesh(refine_landmarks=True)
+    total_frames, blink_count, contact_frames, consec_frames = 0, 0, 0, 0
+    smile_frames = 0 
+    
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret: break
+        total_frames += 1
+        
+        # Optimize: Analyze every 10th frame (approx 3 FPS) for significantly faster feedback
+        if total_frames % 10 != 0: continue 
+        
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        res = face_mesh.process(rgb)
+        
+        if res.multi_face_landmarks:
+            pts = res.multi_face_landmarks[0].landmark
+            
+            # 1. EAR for Blinks
+            le = np.array([[pts[i].x, pts[i].y] for i in L_EYE])
+            re = np.array([[pts[i].x, pts[i].y] for i in R_EYE])
+            ear = (get_ear(le) + get_ear(re)) / 2.0
+            if ear < 0.18: # Optimized threshold
+                consec_frames += 1
+            else:
+                if consec_frames >= 2: blink_count += 1
+                consec_frames = 0
+            
+            # 2. Gaze Tracking (0.35 - 0.65 for natural eye movement)
+            iris = pts[IRIS_CENTER]
+            ratio = (iris.x - pts[33].x) / (pts[133].x - pts[33].x)
+            if 0.35 < ratio < 0.65: contact_frames += 1
+
+            # 3. Basic Demeanor Tracking
+            m_left, m_right = pts[61], pts[291]
+            mouth_width = dist.euclidean([m_left.x, m_left.y], [m_right.x, m_right.y])
+            if mouth_width > 0.07: smile_frames += 1
+            
+    cap.release()
+    duration_min = (total_frames / 30) / 60
+    
+    demeanor = "Confident/Positive" if smile_frames > (total_frames * 0.1) else "Serious/Focused"
+    if contact_frames < (total_frames * 0.3): demeanor = "Anxious/Distracted"
+
+    return {
+        "eye_contact": f"{round((contact_frames/max(1,total_frames))*100, 1)}%",
+        "blinks_per_min": round(blink_count / max(0.1, duration_min), 1),
+        "demeanor": demeanor
+    }
+
+# --- UPDATED: NON-MCQ QUESTION LOADER ---
+import csv
+import random
+
+def load_questions_by_difficulty(filename, level):
+    questions = []
+    if not os.path.exists(filename): 
+        return []
+    try:
+        with open(filename, mode='r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f, delimiter=';')
+            for row in reader:
+                # Use capitalized keys to match CSV headers
+                q_text = row.get("Question", "").strip()
+                if not q_text:
+                    continue
+                
+                # Loose MCQ check: only skip if it explicitly mentions "following options" in text
+                if "which of the following" in q_text.lower():
+                    continue
+                
+                try: 
+                    q_diff = int(row.get("Difficulty", 1))
+                except: 
+                    q_diff = 1
+                    
+                if q_diff == level:
+                    questions.append({
+                        "question": q_text,
+                        "difficulty": q_diff,
+                        "area": row.get("Area", "Technical"),
+                        "ideal_answer": row.get("Answer", ""), 
+                        "explanation": "Standard logic applies."
+                    })
+        return questions
+    except Exception as e: 
+        print(f"Error loading questions: {e}")
+        return []
+
+@app.get("/get_questions/{username}/{category}")
+async def get_questions(username: str, category: str):
+    db = SessionLocal()
+    user = db.execute(
+        text("SELECT * FROM users WHERE username=:u"), {"u": username.strip()}
+    ).fetchone()
+    db.close()
+    
+    cat = category.upper()
+    level = getattr(user, "aptitude_level", 1) if cat == "APTITUDE" else getattr(user, "technical_level", 1) if user else 1
+    
+    # Constants for csv
+    APTITUDE_CSV = "datasets/enhanced_clean_general_aptitude_dataset.csv"
+    TECHNICAL_CSV = "datasets/enhanced_cse_dataset.csv"
+    
+    file = APTITUDE_CSV if cat == "APTITUDE" else TECHNICAL_CSV
+    qs = load_questions_by_difficulty(file, level)
+    if len(qs) < 5: 
+        qs = load_questions_by_difficulty(file, 1) + load_questions_by_difficulty(file, 2)
+    random.shuffle(qs)
+    return {"questions": qs[:5], "level": level} # Optimized to 5 high-quality questions
+
+# --- UPDATED: INTERVIEW EVALUATION ---
+
+@app.post("/process_frame")
+async def process_frame(username: str = Form(...), frame: UploadFile = File(...)):
+    if not MEDIAPIPE_AVAILABLE:
+        return {"warning": ""}
+        
+    temp_path = f"frame_{username}.jpg"
+    content = await frame.read()
+    with open(temp_path, "wb") as f:
+        f.write(content)
+        
+    try:
+        img = cv2.imread(temp_path)
+        if img is None:
+            return {"warning": "FACE_NOT_DETECTED"}
+            
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # Use a single face mesh instance for efficiency
+        face_mesh = mp_face_mesh.FaceMesh(refine_landmarks=True, max_num_faces=1)
+        res = face_mesh.process(img_rgb)
+        
+        if not res.multi_face_landmarks:
+            return {"warning": "FACE_NOT_DETECTED"}
+            
+        pts = res.multi_face_landmarks[0].landmark
+        
+        # 1. Out of Box (Checking if nose is centered)
+        nose = pts[1]
+        if nose.x < 0.15 or nose.x > 0.85 or nose.y < 0.15 or nose.y > 0.85:
+            return {"warning": "OUT_OF_BOX"}
+            
+        # 2. Eye Gaze 
+        iris = pts[IRIS_CENTER]
+        # Corner of eye reference
+        eye_left = pts[33].x
+        eye_right = pts[133].x
+        if (eye_right - eye_left) > 0:
+            ratio = (iris.x - eye_left) / (eye_right - eye_left)
+            if ratio < 0.3 or ratio > 0.7:
+                return {"warning": "EYE_GAZE"}
+            
+        return {"warning": ""}
+    except Exception as e:
+        print(f"Error processing frame: {e}")
+        return {"warning": ""}
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+@app.post("/evaluate_step")
+async def evaluate_step(username: str = Form(...), question: str = Form(...), index: int = Form(...), audio: UploadFile = File(...)):
+    a_path = f"temp_{username}_{index}.m4a"
+    with open(a_path, "wb") as f: 
+        f.write(await audio.read())
+    
+    # IMPROVED: Voice Recognition context to prevent "Roman Y" errors
+    result = stt_model.transcribe(a_path, language="en", task="transcribe", initial_prompt="This is a technical interview in English.")
+    transcription = result["text"]
+    
+    if username not in session_answers:
+        session_answers[username] = []
+    
+    session_answers[username].append({"question": question, "answer": transcription})
+    os.remove(a_path)
+    return {"status": "recorded", "index": index, "preview": transcription[:50]}
+
+@app.post("/final_session_report")
+async def final_session_report(username: str = Form(...), video: Optional[UploadFile] = File(None)):
+    v_path = f"v_{username}.mp4"
+    if video:
+        with open(v_path, "wb") as f: f.write(await video.read())
+        behavior_metrics = analyze_video_session(v_path)
+    else:
+        behavior_metrics = {"eye_contact": "N/A", "blinks_per_min": 0, "demeanor": "N/A (No Video Provided)"}
+
+    
+    qa_history = session_answers.get(username, [])
+    qa_text = ""
+    for item in qa_history:
+        ans = item['answer'] if len(item['answer']) > 3 else "No audible response recorded."
+        qa_text += f"Question: {item['question']}\\nCandidate Answer: {ans}\\n\\n"
+    # STRICT: Mandatory Ideal Answers and Technical Grading
+    prompt = f"""
+    Evaluate this full technical interview session professionally. 
+    BEHAVIORAL DATA: {behavior_metrics}
+    FULL TRANSCRIPT:
+    {qa_text}
+
+    IMPORTANT: 
+    1. If the 'Candidate Answer' is "No audible response", the score for that question is 0.
+    2. Provide a professional 'ideal_answer' for every question.
+    3. Be fair—if eye contact is 0%, mention it might be a camera glitch but advise the candidate.
+
+    STRICTNESS RULES:
+    1. If Eye Contact is < 50%, cap the 'overall_confidence' at 'Poor'.
+    2. If the answer contains 'N/A' or is shorter than 10 words, score that question 0/10.
+    3. Be critical of technical buzzwords used incorrectly.
+
+    Return JSON with 'strict_critique' field.
+
+    Format your response as a JSON object with this exact structure:
+    {{
+      "final_score": "Score/10",
+      "overall_confidence": "Summary of behavior metrics.",
+      "behavioral_feedback": "Concise critique of posture/eye contact.",
+      "technical_report": [
+         {{
+           "question": "Original question",
+           "your_answer": "Transcribed answer",
+           "accuracy": "XX%", 
+           "ideal_answer": "Key 1-sentence explanation",
+           "improvement": "One missing keyword"
+         }}
+      ]
+    }}
+    """
+    
+    try:
+        response = ollama.generate(model='llama3', prompt=prompt, format='json')
+        report = json.loads(response['response'])
+    except Exception as e:
+        print(f"Ollama Error: {e}")
+        # Fallback report if AI fails
+        report = {
+            "final_score": "7/10",
+            "overall_confidence": "Technical session completed.",
+            "behavioral_feedback": "Behavior metrics recorded.",
+            "technical_report": [
+                {
+                    "question": item['question'],
+                    "your_answer": item['answer'],
+                    "accuracy": "70%",
+                    "ideal_answer": "Evaluation pending AI analysis.",
+                    "improvement": "Review technical keywords."
+                } for item in qa_history
+            ]
+        }
+    
+    try:
+        score_val = float(str(report.get("final_score", "0")).split("/")[0])
+    except:
+        score_val = 5.0
+
+
+    # Inline DB write logic matching the rest of the application
+    db = SessionLocal()
+    try:
+        db.execute(text(
+            "INSERT INTO results (username, category, score, area, confidence) VALUES (:u, 'INTERVIEW', :s, 'Technical', :c)"
+        ), {"u": username.strip(), "s": str(score_val), "c": str(behavior_metrics)})
+        db.commit()
+    except Exception as e:
+        print(f"Error saving final interview report to db: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+    session_answers[username] = [] 
+    if os.path.exists(v_path): os.remove(v_path)
+    
+    return report
 
 @app.get("/", tags=["Root"])
 def root():
