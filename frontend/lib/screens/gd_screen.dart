@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:camera/camera.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import '../api_config.dart';
@@ -12,223 +13,404 @@ class GdScreen extends StatefulWidget {
   State<GdScreen> createState() => _GdScreenState();
 }
 
-class _GdScreenState extends State<GdScreen> {
-  final AudioRecorder _recorder = AudioRecorder(); // Updated to latest record API
+class _GdScreenState extends State<GdScreen> with WidgetsBindingObserver {
+  CameraController? _cameraController;
+  final AudioRecorder _audioRecorder = AudioRecorder();
+
+  bool _cameraInitialized = false;
+  bool _recording = false;
+  bool _loading = false;
+  bool _isDisposed = false;
+  int _countdown = 15;
+  Timer? _timer;
+
   Map<String, dynamic>? topic;
   Map<String, dynamic>? result;
-
-  bool loading = false;
-  bool recording = false;
-  int countdown = 15;
-  Timer? _timer;
-  String? recordedFilePath;
-
-  // Theme Colors
-  final Color scaffoldBg = const Color(0xFF0F0C29);
-  final Color cardBg = const Color(0xFF1A1A2E);
-  final Color accentColor = const Color(0xFF6C63FF);
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    fetchTopic();
+    WidgetsBinding.instance.addObserver(this);
+    _initializeSystem();
+  }
+
+  // Handle app lifecycle (Minimizing/Restoring)
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_isDisposed || _cameraController == null) return;
+
+    // On Windows, aggressive disposal on inactive can lead to crashes
+    // We only react if the app is explicitly resumed and the camera was lost
+    if (state == AppLifecycleState.resumed && !_cameraInitialized) {
+      _initCamera();
+    }
+  }
+
+  Future<void> _initializeSystem() async {
+    await fetchTopic();
+    await _initCamera();
+  }
+
+  Future<void> _initCamera() async {
+    if (_isDisposed || !mounted) return;
+
+    // Properly dispose old controller before creating new one
+    if (_cameraController != null) {
+      await _cameraController!.dispose();
+      _cameraController = null;
+      if (mounted) setState(() => _cameraInitialized = false);
+    }
+
+    setState(() => _error = null);
+
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        if (mounted) setState(() => _error = "No cameras found.");
+        return;
+      }
+
+      final frontCamera = cameras.firstWhere(
+        (cam) => cam.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+
+      final controller = CameraController(
+        frontCamera,
+        ResolutionPreset.medium,
+        enableAudio: false, // Prevent audio conflict with 'record' package
+      );
+
+      _cameraController = controller;
+      await controller.initialize();
+
+      if (!_isDisposed && mounted) {
+        setState(() => _cameraInitialized = true);
+      }
+    } catch (e) {
+      debugPrint("Camera init error: $e");
+      if (!_isDisposed && mounted) {
+        setState(() => _error = "Camera error: ${e.toString().split('\n').first}");
+      }
+    }
   }
 
   Future<void> fetchTopic() async {
     try {
       final data = await ApiConfig.fetchGDTopic();
-      setState(() => topic = data);
+      if (!_isDisposed) setState(() => topic = data);
     } catch (e) {
-      debugPrint("Failed to fetch topic: $e");
+      debugPrint("Topic fetch error: $e");
     }
   }
 
-  Future<void> startRecording() async {
-    if (!await _recorder.hasPermission()) return;
+  Future<void> startSession() async {
+    if (_cameraController == null || !_cameraController!.value.isInitialized || _recording) return;
 
-    final dir = await getTemporaryDirectory();
-    recordedFilePath = "${dir.path}/gd_${DateTime.now().millisecondsSinceEpoch}.wav";
-
-    await _recorder.start(
-      const RecordConfig(encoder: AudioEncoder.wav), 
-      path: recordedFilePath!,
-    );
-
-    setState(() {
-      recording = true;
-      countdown = 15;
-      result = null;
-    });
-
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (countdown == 0) {
-        stopRecording();
-      } else {
-        setState(() => countdown--);
+    try {
+      // 0. Ensure previous recording is stopped
+      if (_cameraController!.value.isRecordingVideo) {
+        await _cameraController!.stopVideoRecording();
       }
-    });
+
+      // 1. Start Video
+      await _cameraController!.startVideoRecording();
+
+      // 2. Start Audio
+      final dir = await getTemporaryDirectory();
+      final audioPath =
+          "${dir.path}/gd_audio_${DateTime.now().millisecondsSinceEpoch}.wav";
+
+      await _audioRecorder.start(
+        const RecordConfig(encoder: AudioEncoder.wav),
+        path: audioPath,
+      );
+
+      setState(() {
+        _recording = true;
+        _countdown = 15;
+        result = null;
+      });
+
+      _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (_countdown == 0) {
+          stopSession(audioPath);
+        } else {
+          setState(() => _countdown--);
+        }
+      });
+    } catch (e) {
+      debugPrint("Start session error: $e");
+    }
   }
 
-  Future<void> stopRecording() async {
+  Future<void> stopSession(String aPath) async {
     _timer?.cancel();
-    final path = await _recorder.stop();
+    if (_isDisposed) return;
 
     setState(() {
-      recording = false;
-      loading = true;
+      _recording = false;
+      _loading = true;
     });
 
     try {
-      if (topic?["topic_id"] != null && path != null) {
-        final res = await ApiConfig.submitGDAudio(
+      final XFile videoFile = await _cameraController!.stopVideoRecording();
+      final String? audioPath = await _audioRecorder.stop();
+
+      if (topic?["topic_id"] != null && audioPath != null) {
+        final res = await ApiConfig.submitGD(
           topicId: topic!["topic_id"],
-          audioFile: File(path),
+          audioFile: File(audioPath),
+          videoFile: File(videoFile.path),
         );
-        setState(() => result = res);
+        if (!_isDisposed) setState(() => result = res);
       }
     } catch (e) {
-      debugPrint("Submit failed: $e");
+      debugPrint("Submit error: $e");
+    } finally {
+      if (!_isDisposed) setState(() => _loading = false);
     }
-    setState(() => loading = false);
   }
 
   @override
   void dispose() {
+    _isDisposed = true;
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
-    _recorder.dispose();
+    _cameraController?.dispose();
+    _audioRecorder.dispose();
     super.dispose();
   }
 
+  // ================= UI SECTION =================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: scaffoldBg,
+      backgroundColor: const Color(0xFF0F0C29),
       appBar: AppBar(
-        title: const Text("GD Module", style: TextStyle(color: Colors.white)),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: topic == null
-            ? const Center(child: CircularProgressIndicator())
-            : buildContent(),
-      ),
+          title: const Text("GD Module"),
+          backgroundColor: Colors.transparent,
+          elevation: 0),
+      body: topic == null
+          ? const Center(child: CircularProgressIndicator())
+          : _buildLayout(),
     );
   }
 
-  Widget buildContent() {
+  Widget _buildLayout() {
     return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
       child: Column(
         children: [
-          const Text("DISCUSSION TOPIC", 
-            style: TextStyle(color: Colors.white54, letterSpacing: 1.2, fontSize: 12)),
-          const SizedBox(height: 10),
-          Text(topic!["topic"],
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 40),
-
-          if (recording) ...[
-            const BlinkingRecordingText(),
-            const SizedBox(height: 10),
-            Text("$countdown Seconds Remaining", style: const TextStyle(color: Colors.white70)),
-          ],
-
-          if (!recording && !loading && result == null)
-            ElevatedButton.icon(
-              onPressed: startRecording,
-              icon: const Icon(Icons.mic),
-              label: const Text("START GD SESSION"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: accentColor,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
-              ),
-            ),
-
-          if (loading) const CircularProgressIndicator(),
-
-          if (result != null) buildResultUI(),
+          Text("TOPIC: ${topic!["topic"]}",
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center),
+          const SizedBox(height: 30),
+          _buildCameraPreview(),
+          const SizedBox(height: 30),
+          _buildControls(),
+          if (result != null) _buildResultUI(),
         ],
       ),
     );
   }
 
-  Widget buildResultUI() {
+  Widget _buildCameraPreview() {
+    return AspectRatio(
+      aspectRatio: 16 / 9,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.black,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(15),
+          child: (_cameraInitialized && _cameraController != null && _cameraController!.value.isInitialized)
+              ? CameraPreview(_cameraController!)
+              : _error != null
+                  ? Center(
+                      child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(_error!,
+                            style: const TextStyle(color: Colors.white70)),
+                        TextButton(
+                            onPressed: _initCamera,
+                            child: const Text("Retry Camera"))
+                      ],
+                    ))
+                  : const Center(
+                      child: CircularProgressIndicator(color: Colors.white)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControls() {
+    if (_loading) return const CircularProgressIndicator();
+
+    if (_recording) {
+      return Column(
+        children: [
+          const Text("🔴 RECORDING LIVE",
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+          Text("$_countdown Seconds",
+              style: const TextStyle(color: Colors.white)),
+        ],
+      );
+    }
+
+    return ElevatedButton.icon(
+      icon: const Icon(Icons.videocam),
+      label: const Text("START GD EVALUATION"),
+      onPressed: _cameraInitialized ? startSession : null,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0xFF6C63FF),
+        padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+      ),
+    );
+  }
+
+  Widget _buildResultUI() {
     return Container(
-      margin: const EdgeInsets.only(top: 20),
-      padding: const EdgeInsets.all(20),
+      margin: const EdgeInsets.only(top: 30),
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: cardBg,
-        borderRadius: BorderRadius.circular(15),
+        color: const Color(0xFF1A1A2E), // Your cardBg
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.white10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
+          )
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // --- SCORE DASHBOARD ---
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _scoreTile("Content", result!["content_score"]),
-              _scoreTile("Communication", result!["communication_score"]),
+              _scoreTile("Final Score", result!["final_score"],
+                  const Color(0xFF6C63FF)),
+              _scoreTile(
+                  "Content", result!["content_score"], Colors.greenAccent),
+              _scoreTile(
+                  "Confidence", result!["camera_score"], Colors.orangeAccent),
             ],
           ),
-          const Divider(color: Colors.white10, height: 30),
-          _resultSection("Your Transcription", result!["transcript"], Colors.white70),
-          _resultSection("Strict Feedback", result!["feedback"], Colors.orangeAccent),
-          _resultSection("Pro Ideal Points", result!["ideal_answer"], Colors.blueAccent),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Divider(color: Colors.white10, thickness: 1),
+          ),
+
+          // --- FEEDBACK SECTION ---
+          _sectionHeader(Icons.analytics_outlined, "AI Performance Feedback",
+              Colors.orangeAccent),
+          const SizedBox(height: 12),
+          Text(
+            result!["feedback"] ?? "No feedback available.",
+            style: const TextStyle(
+                color: Colors.white70, fontSize: 14, height: 1.5),
+          ),
+
+          const SizedBox(height: 25),
+
+          // --- IDEAL ANSWER SECTION ---
+          _sectionHeader(
+              Icons.auto_awesome, "Suggested Ideal Answer", Colors.blueAccent),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.blueAccent.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.blueAccent.withOpacity(0.2)),
+            ),
+            child: Text(
+              result!["ideal_answer"] ?? "Generating suggested response...",
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontStyle: FontStyle.italic,
+                height: 1.5,
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 30),
+
+          // --- ACTION BUTTON ---
+          Center(
+            child: TextButton.icon(
+              onPressed: () => setState(() => result = null),
+              icon: const Icon(Icons.refresh, color: Colors.white70),
+              label: const Text("TRY ANOTHER TOPIC",
+                  style: TextStyle(
+                      color: Colors.white70, fontWeight: FontWeight.bold)),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _scoreTile(String label, dynamic score) {
+  // --- UI HELPERS ---
+
+  Widget _scoreTile(String label, dynamic score, Color color) {
     return Column(
       children: [
-        Text(label, style: const TextStyle(color: Colors.white54, fontSize: 11)),
-        Text("$score/10", style: const TextStyle(color: Colors.greenAccent, fontSize: 20, fontWeight: FontWeight.bold)),
+        Text(label,
+            style: const TextStyle(color: Colors.white54, fontSize: 12)),
+        const SizedBox(height: 8),
+        Stack(
+          alignment: Alignment.center,
+          children: [
+            SizedBox(
+              height: 60,
+              width: 60,
+              child: CircularProgressIndicator(
+                value: (double.tryParse(score.toString()) ?? 0) / 10,
+                backgroundColor: Colors.white10,
+                color: color,
+                strokeWidth: 6,
+              ),
+            ),
+            Text(
+              "$score",
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
       ],
     );
   }
 
-  Widget _resultSection(String title, String content, Color accent) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: TextStyle(color: accent, fontSize: 12, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 5),
-          Text(content, style: const TextStyle(color: Colors.white, height: 1.4)),
-        ],
-      ),
+  Widget _sectionHeader(IconData icon, String title, Color color) {
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(width: 10),
+        Text(
+          title.toUpperCase(),
+          style: TextStyle(
+              color: color,
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.2),
+        ),
+      ],
     );
-  }
-}
-
-class BlinkingRecordingText extends StatefulWidget {
-  const BlinkingRecordingText({super.key});
-  @override
-  State<BlinkingRecordingText> createState() => _BlinkingRecordingTextState();
-}
-
-class _BlinkingRecordingTextState extends State<BlinkingRecordingText> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 1))..repeat(reverse: true);
-  }
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-  @override
-  Widget build(BuildContext context) {
-    return FadeTransition(opacity: _controller, 
-      child: const Text("🔴 RECORDING LIVE", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 16)));
   }
 }

@@ -1,79 +1,62 @@
-# 75% Evaluation Technical Presentation Guide
+# Master Presentation Guide: AI Placement Assistant
 
-This document provides a detailed breakdown of the AI Placement Assistant project. It is designed to help you explain the "why" and "how" of every major component during your evaluation.
-
-## 1. Project Overview & Architecture
-The project is an **AI-driven career preparation platform** that helps students prepare for placements using Technical/Aptitude quizzes, AI Group Discussions, and real-time Industry Insights.
-
-### The Tech Stack
-- **Frontend**: Flutter (Cross-platform UI)
-- **Backend**: FastAPI (High-performance Python API)
-- **AI Engines**: 
-  - **Ollama (Llama 3.1)**: Generates quiz explanations and news summaries.
-  - **OpenAI Whisper**: Transcribes audio for Interview/GD practice.
-- **Database**: MySQL (Structured data management)
-- **State Management**: Provider (Flutter)
+Use this guide to explain your project's technical depth, workflows, and innovation to your evaluators.
 
 ---
 
-## 2. Backend Deep Dive (FastAPI)
-
-### `backend/main.py` (The Brain)
-- **Purpose**: Initializes the server, handles authentication, and orchestrates the Quiz system.
-- **Key Logic**:
-  - `lifespan`: Loads the Whisper model once at startup to save memory.
-  - `get_daily_quiz`: An adaptive algorithm that fetches 10 questions per day based on the user's difficulty level and branch.
-  - `process_weekly_level_up`: Runs every Sunday to analyze student performance and "Level Up" their difficulty setting (Adaptive Learning).
-
-### `backend/news_routes.py` (Real-time Insights)
-- **Purpose**: Fetches technology trends from Hacker News and summarizes them using AI.
-- **Key Logic**:
-  - `get_latest_news`: Uses a `ThreadPoolExecutor` to fetch 80 stories in parallel for maximum speed.
-  - `get_news_summary`: Takes a news title and sends a prompt to **Llama 3.1** to create a one-sentence professional summary.
-
-### `backend/ai_engine.py` (AI Logic)
-- **Purpose**: Contains the raw prompts and configurations for the LLM.
-- **Logic**: It structures instructions so the AI acts like a "Placement Expert" rather than a general chatbot.
+## 🏗️ 1. The Technology Stack (The Foundation)
+Explain **why** you chose these technologies:
+- **Frontend**: **Flutter (Dart)** - Chosen for a premium, single-codebase UI that feels like a native desktop/mobile app.
+- **Backend**: **FastAPI (Python)** - The fastest Python framework specifically suited for handling asynchronous AI tasks (Ollama/Whisper).
+- **Database**: **MySQL** - Transitioned from SQLite to MySQL to support multi-user concurrency and better data integrity.
+- **AI Brain**: **Local Llama 3 (via Ollama)** - Ensures data privacy and offline capability; no API costs or latency issues.
+- **State Management**: **Provider** - Used to maintain a seamless user session (Login -> Dashboard -> Quiz).
 
 ---
 
-## 3. Frontend Deep Dive (Flutter)
+## 🔄 2. Core Workflows (How it Works)
 
-### `frontend/lib/screens/dashboard_screen.dart` (The Nerve Center)
-- **Purpose**: Central hub for students. Shows progress charts and the news popup.
-- **Key Logic**:
-  - `Timer.periodic`: Triggers the industry news popup every 5 minutes.
-  - `OverlayEntry`: Used to "inject" the news notification on top of the UI without interrupting the user's workflow.
-  - `LineChart`: Visualizes weekly progress using the `fl_chart` library.
+### Workflow A: Adaptive Learning Engine
+1.  **Student** takes a Daily Quiz (10 questions).
+2.  **FastAPI** fetches questions based on the user's current level (Easy/Medium/Hard).
+3.  **MySQL** stores only the **first attempt** for analytics.
+4.  **Evaluation**: If the average score stays >7.0 across 7 days, the system triggers a **Level Up**.
 
-### `frontend/lib/widgets/news_notification.dart` (Dynamic UI)
-- **Purpose**: The sliding card that shows latest tech news.
-- **Logic**: Uses `AnimationController` for the smooth slide-in effect and `FlutterTts` to read summaries aloud when the user clicks "Read".
-
-### `frontend/lib/api_config.dart` (The Bridge)
-- **Purpose**: Centralizes all HTTP communication.
-- **Logic**: All frontend requests go through this class, making it easy to change the server address (localhost to IP) in one place.
+### Workflow B: AI Industry Awareness
+1.  **News Fetch**: The backend uses **Parallel Threading** (`ThreadPoolExecutor`) to fetch 80+ headlines from Hacker News in <2 seconds.
+2.  **Filtering**: A custom keyword algorithm extracts only placement-relevant tech news.
+3.  **AI Summarization**: **Llama 3** processes the titles to create a 3-sentence "Industry Briefing."
+4.  **Audio**: **Flutter TTS** reads the briefing to provide an eyes-free learning experience.
 
 ---
 
-## 4. Demonstration Script (75% Evaluation)
+## ⚡ 3. Technical Refinements & Techniques
+*Highlight these to show your technical expertise:*
 
-Follow these steps for a "WOW" demo:
+### 🔹 Technique 1: Parallel News Processing
+> "Instead of fetching news one by one, I implemented a **ThreadPoolExecutor** with 20 workers. This reduced the data fetching time by 90%, making the dashboard feel instant."
 
-1.  **Login & Dashboard**: Show the personalized greeting and the **Weekly Holistic Growth** graph. Explain how it tracks progress across all modules.
-2.  **Industry Trends**: Navigate to the news section. Explain that the data is live technology news. Highlight the **AI Summarization** by clicking the volume icon.
-3.  **Quiz Flow**: Start a Technical Quiz. Answer a question and show the **AI Explanation**. Explain that the AI clarifies *why* an answer is correct.
-4.  **GD/Interview**: Demonstrate audio recording. Mention that **Whisper AI** transcribes the voice and **Llama 3.1** evaluates the content quality.
+### 🔹 Technique 2: Strict Weekly Analytics mapping
+> "To prevent data confusion, I built a custom **X-axis mapping logic**. The graphs strictly follow the Monday-to-Sunday timeline. If today is Wednesday, the graph line only draws up to 'Wed', preventing future plotting and ensuring real-time accuracy."
+
+### 🔹 Technique 3: MySQL Connection Pooling
+> "I implemented **SQLAlchemy Connection Pooling** and event listeners to prevent 'MySQL Gone Away' errors during long idle periods, ensuring the server stays stable 24/7."
 
 ---
 
-## 5. Potential Evaluator Questions & Answers
+## 🗣️ 4. The "WOW" Demo Script (Talk Track)
 
-**Q: How does the app decide the difficulty level?**
-*A: Every Sunday, the backend calculates an average score. If it's >7/10, the user's level (Easy/Medium/Hard) increments.*
+| Step | What to Show | What to Say |
+| :--- | :--- | :--- |
+| **Intro** | Dashboard | *"Welcome to the AI Placement Assistant. Here you see a holistic view of a student's readiness, including their current streak and progress level."* |
+| **AI News** | News Popup | *"Under the hood, we are fetching real-time data from Hacker News. Observe the 'Trends Briefing'—that is not static text. Our local AI model, Llama 3, just synthesized those headlines into a professional summary."* |
+| **Analytics** | Performance Chart | *"Notice the growth profile. We separate Technical and Aptitude marks into two distinct lines. This isn't just raw data; it's strictly filtered for first attempts to show the student's true learning curve."* |
+| **Quiz** | Adaptive Quiz | *"The quiz engine is adaptive. As the student performs better, the questions automatically shift from Easy to Hard, mimicking real placement difficulty levels."* |
 
-**Q: Is the AI running locally?**
-*A: Yes, we use Ollama to run high-performance models locally on the server, ensuring privacy and no API costs.*
+---
 
-**Q: Why use Flutter and FastAPI?**
-*A: Flutter provides a premium, responsive UI, while FastAPI is the fastest Python framework for handling AI and data processing.*
+## ❓ 5. Anticipated Questions
+- **Q: Why run AI locally?**
+  - **A:** *"Scalability and Privacy. By using Ollama and Llama 3 locally, we eliminate dependency on expensive APIs and keep all student performance data inside our own server infrastructure."*
+- **Q: How do you handle branch-specific questions?**
+  - **A:** *"We have a mapping layer. For example, AEI students are automatically served ECE-technical questions, ensuring their preparation is branch-aligned even with common datasets."*

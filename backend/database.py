@@ -87,7 +87,7 @@ def get_db():
 def init_db():
     """Initialize database tables"""
     try:
-        from models import User, Score, Question, GDEvaluation
+        from models import User, Score, Question, GDEvaluation, GDTopic, GDResult
         Base.metadata.create_all(bind=mysql_engine)
         print("Database tables created/verified successfully")
     except Exception as e:

@@ -153,7 +153,7 @@ def process_weekly_level_up(username: str, db: Session):
         level_up_occurred = (new_apt_lvl > apt_lvl or new_tech_lvl > tech_lvl)
 
         # 4. Save to weekly_stats
-        overall_avg = (apt_avg + tech_avg) / 2 if (apt_avg > 0 and tech_avg > 0) else (apt_avg or tech_avg)
+        overall_avg = (apt_percent + tech_percent) / 2 if (apt_percent > 0 and tech_percent > 0) else (apt_percent or tech_percent)
         
         db.execute(
             text("""

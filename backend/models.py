@@ -76,3 +76,28 @@ class WeeklyStat(Base):
     avg_score = Column(Integer)  # Aggregate score across all modules
     is_level_up = Column(Integer, default=0)
     total_activities = Column(Integer, default=0)
+
+
+class GDTopic(Base):
+    """Model for storing Group Discussion topics"""
+    __tablename__ = "gd_topics"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    topic = Column(Text, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class GDResult(Base):
+    """Model for storing Group Discussion results and evaluations"""
+    __tablename__ = "gd_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    topic_id = Column(Integer, nullable=False)
+    user_answer = Column(Text)
+    content_score = Column(Integer)
+    communication_score = Column(Integer)
+    camera_score = Column(Integer)
+    final_score = Column(Integer)
+    feedback = Column(Text)
+    ideal_answer = Column(Text)
+    timestamp = Column(TIMESTAMP, server_default=func.now())

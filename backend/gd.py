@@ -1,225 +1,181 @@
+from database import SessionLocal, get_db
+from ollama_eval import evaluate_gd
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import text
+import subprocess
 import whisper
 import os
 import uuid
-from datetime import datetime
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from pydantic import BaseModel
 
-from database import get_db
-from gd_evaluator import evaluate_gd, is_silent_audio, is_silent_transcript
+class GDResponse(BaseModel):
+    topic: str
+    transcript: str
+    content_score: int
+    communication_score: int
+    camera_score: int
+    final_score: int
+    feedback: str
+    camera_feedback: str
+    ideal_answer: str
+
 
 router = APIRouter()
 
-# Load Whisper model
-stt_model = whisper.load_model("base")
-
-# Recordings directory
-RECORDINGS_DIR = "recordings"
-os.makedirs(RECORDINGS_DIR, exist_ok=True)
+# ---------------- LOAD WHISPER ONCE ----------------
+whisper_model = whisper.load_model("base")
 
 
-@router.post("/gd/submit-audio")
-async def evaluate_gd_submission(
-    topic_id: int = Form(...),
-    username: str = Form(...),
-    audio: UploadFile = File(...),
-    db: Session = Depends(get_db)
-):
-    """
-    Evaluate a Group Discussion submission.
-    
-    1. Save audio file
-    2. Transcribe with Whisper
-    3. Evaluate with Ollama
-    4. Store in MySQL
-    5. Return results
-    """
-    
-    # Fetch topic text from id if needed, or use a lookup
-    topics_list = [
-        "Should artificial intelligence replace human decision-making?",
-        "Is remote work better than office work?",
-        "Should college education be free for everyone?",
-        "Is social media doing more harm than good?",
-        "Should cryptocurrencies replace traditional currency?",
-        "Is climate change the biggest threat to humanity?",
-        "Should there be stricter regulations on tech companies?",
-        "Is work-life balance achievable in modern careers?",
-        "Should voting be made mandatory?",
-        "Is online learning as effective as classroom learning?"
-    ]
-    topic_text = topics_list[topic_id % len(topics_list)]
+# ---------------- DB Dependency ----------------
+# Overriding get_db to ensure it uses the one passed in if needed, 
+# but the request provided a specific implementation.
 
-    # Generate unique filename
-    audio_filename = f"{uuid.uuid4()}_{audio.filename}"
-    audio_path = os.path.join(RECORDINGS_DIR, audio_filename)
-    
-    try:
-        # Save uploaded audio
-        with open(audio_path, "wb") as f:
-            f.write(await audio.read())
-        
-        # Transcribe audio using Whisper
-        print(f"🎙️ Transcribing audio for topic: {topic_text}")
-        transcription_result = stt_model.transcribe(audio_path)
-        transcript = transcription_result.get("text", "").strip()
-        
-        # Evaluate using Ollama
-        print(f"🤖 Evaluating with Ollama...")
-        evaluation = evaluate_gd(topic_text, transcript, audio_path)
-        
-        # Store evaluation in MySQL
-        try:
-            db.execute(
-                text("""
-                    INSERT INTO gd_evaluations 
-                    (username, topic, transcript, content_score, communication_score, 
-                     feedback, audio_path, timestamp)
-                    VALUES (:username, :topic, :transcript, :content_score, 
-                             :communication_score, :feedback, :audio_path, :timestamp)
-                    """),
-                    {
-                        "username": username.strip(),
-                        "topic": topic_text,
-                        "transcript": transcript,
-                        "content_score": evaluation["content_score"],
-                        "communication_score": evaluation["communication_score"],
-                        "feedback": evaluation["feedback"],
-                        "audio_path": audio_path,
-                        "timestamp": datetime.now()
-                    }
-            )
-
-            # Persist to unified results table for weekly holistic level-up
-            avg_gd_score = (evaluation["content_score"] + evaluation["communication_score"]) / 2
-            db.execute(
-                text("""
-                    INSERT INTO results (username, category, score, area, timestamp) 
-                    VALUES (:username, :category, :score, :area, NOW())
-                """),
-                {
-                    "username": username.strip(),
-                    "category": "GD",
-                    "score": int(avg_gd_score),
-                    "area": topic_text[:100]
-                }
-            )
-            db.commit()
-            print("✅ Evaluation stored in MySQL")
-        except Exception as e:
-            print(f"⚠️ Warning: Could not store evaluation in database: {e}")
-            db.rollback()
-
-        
-        return {
-            "status": "success",
-            "transcript": evaluation["transcript"],
-            "content_score": evaluation["content_score"],
-            "communication_score": evaluation["communication_score"],
-            "feedback": evaluation["feedback"],
-            "ideal_answer": evaluation["ideal_answer"]
-        }
-        
-    except Exception as e:
-        print(f"❌ Error in GD evaluation: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    
-    finally:
-        # Optional: Clean up audio file after processing
-        # Uncomment if you don't want to keep audio files
-        # if os.path.exists(audio_path):
-        #     os.remove(audio_path)
-        pass
-
-
-@router.get("/history/{username}")
-async def get_gd_history(username: str, db: Session = Depends(get_db)):
-    """
-    Get GD evaluation history for a user.
-    """
-    try:
-        result = db.execute(
-            text("""
-                SELECT id, topic, content_score, communication_score, 
-                       feedback, timestamp
-                FROM gd_evaluations
-                WHERE username = :username
-                ORDER BY timestamp DESC
-                LIMIT 10
-            """),
-            {"username": username.strip()}
-        )
-        
-        rows = result.fetchall()
-        
-        history = []
-        for row in rows:
-            history.append({
-                "id": row[0],
-                "topic": row[1],
-                "content_score": row[2],
-                "communication_score": row[3],
-                "feedback": row[4],
-                "timestamp": str(row[5])
-            })
-        
-        return {
-            "status": "success",
-            "history": history
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
+# =================================================
+# 1️⃣ FETCH RANDOM GD TOPIC
+# =================================================
 @router.get("/gd/topic")
-async def get_gd_topic():
-    """
-    Get a single random GD topic.
-    """
-    import random
-    topics = [
-        "Should artificial intelligence replace human decision-making?",
-        "Is remote work better than office work?",
-        "Should college education be free for everyone?",
-        "Is social media doing more harm than good?",
-        "Should cryptocurrencies replace traditional currency?",
-        "Is climate change the biggest threat to humanity?",
-        "Should there be stricter regulations on tech companies?",
-        "Is work-life balance achievable in modern careers?",
-        "Should voting be made mandatory?",
-        "Is online learning as effective as classroom learning?"
-    ]
-    
-    idx = random.randint(0, len(topics) - 1)
+def get_gd_topic(db: Session = Depends(get_db)):
+    # Debug: Check if the table has ANY data first
+    count = db.execute(text("SELECT COUNT(*) FROM gd_topics")).scalar()
+    print(f"DEBUG: Total topics in database: {count}")
+
+    result = db.execute(
+        text("SELECT id, topic FROM gd_topics ORDER BY RAND() LIMIT 1")
+    ).fetchone()
+
+    if not result:
+        print("DEBUG: No result returned from query")
+        raise HTTPException(status_code=404, detail="No GD topics found")
+
+    print(f"DEBUG: Selected Topic ID: {result[0]}")
     
     return {
-        "status": "success",
-        "topic": topics[idx],
-        "topic_id": idx
+        "topic_id": result[0],
+        "topic": result[1]
     }
 
 
-@router.get("/topics")
-async def get_gd_topics():
-    """
-    Get list of available GD topics.
-    """
-    topics = [
-        "Should artificial intelligence replace human decision-making?",
-        "Is remote work better than office work?",
-        "Should college education be free for everyone?",
-        "Is social media doing more harm than good?",
-        "Should cryptocurrencies replace traditional currency?",
-        "Is climate change the biggest threat to humanity?",
-        "Should there be stricter regulations on tech companies?",
-        "Is work-life balance achievable in modern careers?",
-        "Should voting be made mandatory?",
-        "Is online learning as effective as classroom learning?"
-    ]
+# =================================================
+# 2️⃣ SUBMIT AUDIO + VIDEO + FULL AI EVALUATION
+# =================================================
+@router.post("/submit", response_model=GDResponse)
+async def submit_gd(
+    topic_id: int = Form(...),
+    audio: UploadFile = File(...),
+    video: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    os.makedirs("uploads", exist_ok=True)
+
+    # ---------- SAVE AUDIO ----------
+    raw_audio_path = f"uploads/{uuid.uuid4()}_{audio.filename}"
+
+    with open(raw_audio_path, "wb") as f:
+        f.write(await audio.read())
+
+    # ---------- SAVE VIDEO ----------
+    video_path = f"uploads/{uuid.uuid4()}_{video.filename}"
+
+    with open(video_path, "wb") as f:
+        f.write(await video.read())
+
+    # ---------- CONVERT AUDIO TO WAV ----------
+    if raw_audio_path.lower().endswith(".wav"):
+        wav_path = raw_audio_path
+    else:
+        wav_path = raw_audio_path.rsplit(".", 1)[0] + ".wav"
+
+        process = subprocess.run(
+            ["ffmpeg", "-y", "-i", raw_audio_path, wav_path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=60
+        )
+
+
+        if process.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Audio conversion failed: {process.stderr}"
+            )
+
+    # ---------- TRANSCRIBE ----------
+    result = whisper_model.transcribe(wav_path)
+    transcript = result["text"].strip()
+
+    # ---------- FETCH TOPIC ----------
+    topic_row = db.execute(
+        text("SELECT topic FROM gd_topics WHERE id = :id"),
+        {"id": topic_id}
+    ).fetchone()
+
+    if not topic_row:
+        raise HTTPException(status_code=400, detail="Invalid topic ID")
+
+    topic_text = topic_row.topic
+
+    # ---------- INSERT INITIAL ROW ----------
+    insert = db.execute(
+        text("""
+            INSERT INTO gd_results (topic_id, user_answer)
+            VALUES (:tid, :ans)
+        """),
+        {"tid": topic_id, "ans": transcript}
+    )
+    db.commit()
+    gd_id = insert.lastrowid
+
+    # ---------- AI EVALUATION ----------
+    evaluation = evaluate_gd(
+        topic=topic_text,
+        transcript=transcript,
+        audio_path=wav_path,
+        video_path=video_path
+    )
+
+    # ---------- CLEANUP FILES ----------
+    for path in [raw_audio_path, wav_path, video_path]:
+        if os.path.exists(path):
+            os.remove(path)
+
+    # ---------- UPDATE DB ----------
+    db.execute(
+        text("""
+            UPDATE gd_results
+            SET content_score = :cs,
+                communication_score = :coms,
+                camera_score = :cams,
+                final_score = :fs,
+                feedback = :fb,
+                ideal_answer = :ideal
+            WHERE id = :id
+        """),
+        {
+            "id": gd_id,
+            "cs": evaluation["content_score"],
+            "coms": evaluation["communication_score"],
+            "cams": evaluation["camera_score"],
+            "fs": evaluation["final_score"],
+            "fb": evaluation["feedback"],
+            "ideal": evaluation["ideal_answer"],
+        }
+    )
+    db.commit()
     
+    print("FINAL OUTPUT:", evaluation)
+
+    # ---------- RESPONSE ----------
     return {
-        "status": "success",
-        "topics": topics
+        "topic": topic_text,
+        "transcript": transcript,
+        "content_score": evaluation["content_score"],
+        "communication_score": evaluation["communication_score"],
+        "camera_score": evaluation["camera_score"],
+        "final_score": evaluation["final_score"],
+        "feedback": evaluation["feedback"],
+        "camera_feedback": evaluation["camera_feedback"],
+        "ideal_answer": evaluation["ideal_answer"],
     }
